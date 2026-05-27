@@ -4,6 +4,7 @@ import {getFilteredCommands} from "./filter-commands";
 import {COMMANDS} from "./Commands";
 
 
+
 const MAX_VISIBLE_ITEMS = 8;
 
 const COMMAND_COL_WIDTH = Math.max(...COMMANDS.map((cmd)=>cmd.name.length)) + 4;
