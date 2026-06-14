@@ -44,19 +44,9 @@ export const AgentsDialogContent = ({
       onSelect={handleSelect}
       filterFn={(item, query) => item.label.toLowerCase().includes(query.toLowerCase())}
       renderItem={(item, isSelected) => (
-        <box flexDirection="row" gap={1}>
-          <text selectable={false} fg={isSelected ? "black" : "white"}>
-            {item.mode === currentMode ? " ◉ " : " ○ "}
-            {item.label}
-          </text>
-          <text 
-            selectable={false} 
-            attributes={TextAttributes.DIM} 
-            fg={isSelected ? "black" : colors.dimSeparator}
-          >
-            {item.description}
-          </text>
-        </box>
+        <text selectable={false} fg={isSelected ? "black" : "white"}>
+          {(item.mode === currentMode ? " ◉ " : " ○ ") + item.label + "  " + item.description}
+        </text>
       )}
       getKey={(item) => item.mode}
       placeholder="Search agents"

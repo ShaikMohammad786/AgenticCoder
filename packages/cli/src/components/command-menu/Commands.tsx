@@ -4,6 +4,7 @@ import {
   ModelsDialogContent,
   SessionsDialogContent,
   ThemeDialogContent,
+  McpDialogContent,
 } from "../dialogs";
 import type { Command } from "./types";
 
@@ -94,7 +95,7 @@ export const COMMANDS: Command[] = [
     value: "/help",
     action: (ctx) => {
       ctx.toast.show({
-        message: "Commands: /new /clear /undo /commit /agents /models /sessions /theme /login /logout /upgrade /usage /help /status /exit",
+        message: "Commands: /new /clear /undo /commit /agents /models /mcp /sessions /theme /login /logout /upgrade /usage /help /status /exit",
       });
     },
   },
@@ -155,6 +156,17 @@ export const COMMANDS: Command[] = [
         title: "Select Theme",
         children: <ThemeDialogContent />,
       })
+    },
+  },
+  {
+    name: "mcp",
+    description: "View MCP servers and tools",
+    value: "/mcp",
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "MCP Servers",
+        children: <McpDialogContent />,
+      });
     },
   },
   {

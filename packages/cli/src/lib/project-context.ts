@@ -154,6 +154,8 @@ export function getAgenticCoderDir(cwd?: string): string {
 }
 
 /**
- * Alias for getProjectContextInjection — used by use-chat.ts
+ * Async wrapper for getProjectContextInjection — used by use-chat.ts
  */
-export const buildProjectContext = getProjectContextInjection;
+export async function buildProjectContext(cwd?: string): Promise<string> {
+  return getProjectContextInjection(cwd);
+}

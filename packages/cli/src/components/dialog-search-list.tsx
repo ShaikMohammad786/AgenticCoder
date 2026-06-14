@@ -3,6 +3,7 @@ import { TextAttributes, type InputRenderable, type ScrollBoxRenderable } from "
 import { useKeyboard } from "@opentui/react";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { useTheme } from "../providers/theme";
+import { useDialog } from "../providers/dialog";
 
 const MAX_VISIBLE_ITEMS = 6;
 
@@ -35,6 +36,7 @@ export function DialogSearchList<T>({
   const scrollRef = useRef<ScrollBoxRenderable>(null);
   const { isTopLayer } = useKeyboardLayer();
   const { colors } = useTheme();
+  const dialog = useDialog();
 
   const handleContentChange = useCallback(() => {
     const text = inputRef.current?.value ?? "";
@@ -54,6 +56,11 @@ export function DialogSearchList<T>({
 
   useKeyboard((key) => {
     if (!isTopLayer("dialog")) return;
+
+    if (key.name === "escape") {
+      dialog.close();
+      return;
+    }
 
     if (key.name === "return" || key.name === "enter") {
       const item = filtered[selectedIndex];

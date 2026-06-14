@@ -11,12 +11,11 @@ import { Session } from "./screens/session";
 function ErrorFallback() {
   const error = useRouteError();
   const message = error instanceof Error ? error.message : String(error);
-  const stack = error instanceof Error ? error.stack ?? "" : "";
 
   return (
     <box flexDirection="column" padding={2} gap={1}>
-      <text fg="red">{"ERROR: " + message}</text>
-      <text fg="gray">{stack.split("\n").slice(0, 8).join("\n")}</text>
+      <text fg="red">{"Something went wrong: " + message}</text>
+      <text fg="gray">{"Press Ctrl+C to restart"}</text>
     </box>
   );
 }

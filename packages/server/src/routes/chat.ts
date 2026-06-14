@@ -45,6 +45,12 @@ const submitSchema = z.object({
     .min(1),
   mode: modeSchema,
   model: z.string().refine(isSupportedChatModel, "Unsupported model"),
+  projectContext: z.string().optional(),
+  mcpTools: z.array(z.object({
+    name: z.string(),
+    description: z.string(),
+    inputSchema: z.record(z.unknown()),
+  })).optional(),
 });
 
 const submitValidator = zValidator("json", submitSchema, (result, c) => {
@@ -72,7 +78,7 @@ const app = new Hono<AuthenticatedEnv>()
     async (c) => {
       try {
         const userId = c.get("userId");
-        const { id, messages, mode, model } = c.req.valid("json");
+        const { id, messages, mode, model, projectContext, mcpTools } = c.req.valid("json");
 
         const session = await db.session.findUnique({
           where: { id, userId },
@@ -83,7 +89,18 @@ const app = new Hono<AuthenticatedEnv>()
         }
 
         const startTime = Date.now();
-        const tools = getToolContracts(mode);
+        const builtInTools = getToolContracts(mode);
+
+        // Merge MCP tools with built-in tools
+        const tools: Record<string, any> = { ...builtInTools };
+        if (mcpTools && mcpTools.length > 0) {
+          for (const mcpTool of mcpTools) {
+            tools[mcpTool.name] = {
+              description: mcpTool.description,
+              parameters: mcpTool.inputSchema,
+            };
+          }
+        }
         const resolvedModel = resolveChatModel(model);
         const previousMessages = Array.isArray(session.messages)
           ? (session.messages as unknown as agenticcoderUIMessage[])
@@ -136,7 +153,7 @@ const app = new Hono<AuthenticatedEnv>()
 
         const result = streamText({
           model: resolvedModel.model,
-          system: buildSystemPrompt({ mode }),
+          system: buildSystemPrompt({ mode }) + (projectContext ? "\n\n" + projectContext : ""),
           messages: modelMessages,
           tools,
           maxSteps: 25,

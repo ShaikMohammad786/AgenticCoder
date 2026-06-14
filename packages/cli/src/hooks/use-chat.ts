@@ -13,6 +13,7 @@ import { getAuth } from "../lib/auth";
 import { executeLocalTool } from "../lib/local-tools";
 import { buildProjectContext } from "../lib/project-context";
 import { extractImageMentions } from "../lib/image-input";
+import { initializeMcp, getAllMcpTools, hasMcpConfig } from "../lib/mcp-client";
 
 export type ChatMessageMetadata = {
   mode?: ModeType;
@@ -34,6 +35,10 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
   // Cache project context so we only detect once per session
   const projectContextRef = useRef<string | null>(null);
   const projectContextLoadedRef = useRef(false);
+
+  // MCP tools cache
+  const mcpToolsRef = useRef<ReturnType<typeof getAllMcpTools> | null>(null);
+  const mcpInitializedRef = useRef(false);
 
   // Bash streaming state (local to session, no provider needed)
   const [bashOutput, setBashOutput] = useState("");
@@ -58,6 +63,16 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
         projectContextRef.current = ctx;
       });
     }
+    // Initialize MCP lazily if config exists (with timeout so it never blocks chat)
+    if (!mcpInitializedRef.current && hasMcpConfig()) {
+      mcpInitializedRef.current = true;
+      Promise.race([
+        initializeMcp(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000)),
+      ]).then(() => {
+        mcpToolsRef.current = getAllMcpTools();
+      }).catch(() => {});
+    }
   }, []);
 
   const transport = useMemo(() => {
@@ -80,6 +95,13 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
             ? [previousMessage, message]
             : [message];
 
+        // Build MCP tool definitions for the server
+        const mcpTools = mcpToolsRef.current?.map((t) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+        })) ?? [];
+
         return {
           body: {
             id: sessionId,
@@ -88,6 +110,8 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
             model: message.metadata?.model ?? metadata?.model,
             // Send project context (AGENT.md + detected framework info)
             projectContext: projectContextRef.current ?? undefined,
+            // Send MCP tool definitions so server can expose them to AI
+            mcpTools: mcpTools.length > 0 ? mcpTools : undefined,
           },
         }
       }
