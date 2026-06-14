@@ -226,37 +226,9 @@ if (isMcpTool(toolName)) {
 
 ---
 
-## 2. Dialog ESC Fix
 
-#### [dialog-search-list.tsx](file:///m:/MOHAMMAD/Full%20Stack%20Develoment/Web%20Development/MERN/AgenticCoder/packages/cli/src/components/dialog-search-list.tsx)
 
-**Problem:** The `<input focused>` element in DialogSearchList captures keyboard events. The parent `Dialog` component has ESC handling, but it doesn't fire because the focused input swallows the keypress.
-
-**Fix:** Added `useDialog()` + ESC handling directly inside DialogSearchList:
-
-```diff
-+import { useDialog } from "../providers/dialog";
-
- export function DialogSearchList<T>(...) {
-+  const dialog = useDialog();
-
-   useKeyboard((key) => {
-     if (!isTopLayer("dialog")) return;
-+
-+    if (key.name === "escape") {
-+      dialog.close();
-+      return;
-+    }
-     // ...existing up/down/enter handlers
-   });
- }
-```
-
-**This fixes ESC for ALL dialogs:** `/models`, `/agents`, `/theme`, `/sessions`, `/mcp`
-
----
-
-## 3. Agents Dialog Fix
+## 2. Agents Dialog Fix
 
 #### [agents-dialog.tsx](file:///m:/MOHAMMAD/Full%20Stack%20Develoment/Web%20Development/MERN/AgenticCoder/packages/cli/src/components/dialogs/agents-dialog.tsx)
 
@@ -283,7 +255,7 @@ if (isMcpTool(toolName)) {
 
 ---
 
-## 4. Preference Persistence
+## 3. Preference Persistence
 
 #### [prompt-config/index.tsx](file:///m:/MOHAMMAD/Full%20Stack%20Develoment/Web%20Development/MERN/AgenticCoder/packages/cli/src/providers/prompt-config/index.tsx)
 
@@ -329,35 +301,9 @@ Same pattern — loads theme name from preferences on mount, saves on `/theme` c
 
 ---
 
-## 5. Error Boundaries
 
-#### [index.tsx](file:///m:/MOHAMMAD/Full%20Stack%20Develoment/Web%20Development/MERN/AgenticCoder/packages/cli/src/index.tsx)
 
-**Problem:** React Router's default error boundary renders `<h2>` and `<p>` HTML tags. @opentui's renderer crashes on unsupported HTML tags with "Text must be created inside of a text node".
-
-**Fix:** Custom `ErrorFallback` using only @opentui-compatible elements:
-```tsx
-function ErrorFallback() {
-  const error = useRouteError();
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    <box flexDirection="column" padding={2} gap={1}>
-      <text fg="red">{"Something went wrong: " + message}</text>
-      <text fg="gray">{"Press Ctrl+C to restart"}</text>
-    </box>
-  );
-}
-
-// Used in route config:
-createBrowserRouter([{
-  errorElement: <ErrorFallback />, // replaces React Router default
-  // ...
-}]);
-```
-
----
-
-## 6. Checkpoint / Undo System
+## 4. Checkpoint / Undo System
 
 #### [checkpoint.ts](file:///m:/MOHAMMAD/Full%20Stack%20Develoment/Web%20Development/MERN/AgenticCoder/packages/cli/src/lib/checkpoint.ts)
 
@@ -380,7 +326,7 @@ stash@{1}: agenticcoder-checkpoint-1718378300000
 
 ---
 
-## 7. Image Input
+## 5. Image Input
 
 #### [image-input.ts](file:///m:/MOHAMMAD/Full%20Stack%20Develoment/Web%20Development/MERN/AgenticCoder/packages/cli/src/lib/image-input.ts)
 
@@ -406,7 +352,7 @@ type ImageAttachment = {
 
 ---
 
-## 8. Project Context Injection
+## 6. Project Context Injection
 
 #### [project-context.ts](file:///m:/MOHAMMAD/Full%20Stack%20Develoment/Web%20Development/MERN/AgenticCoder/packages/cli/src/lib/project-context.ts)
 
@@ -430,7 +376,7 @@ type ImageAttachment = {
 
 ---
 
-## 9. Bash Streaming
+## 7. Bash Streaming
 
 **Flow across files:**
 
@@ -472,22 +418,6 @@ const onBashOutput = useCallback((chunk: string) => {
 
 ---
 
-## Provider Ordering
-
-#### [root-layout.tsx](file:///m:/MOHAMMAD/Full%20Stack%20Develoment/Web%20Development/MERN/AgenticCoder/packages/cli/src/layouts/root-layout.tsx)
-
-**Critical ordering (outside → inside):**
-```
-KeyboardLayerProvider
-  └→ PromptConfigProvider   ← must be ABOVE DialogProvider
-       └→ DialogProvider     ← dialog content can access PromptConfig
-            └→ ToastProvider
-                 └→ {children}
-```
-
-**Why this order matters:** `ModelsDialogContent` calls `usePromptConfig()`. If `DialogProvider` wraps `PromptConfigProvider`, the dialog renders OUTSIDE the prompt config context → crash.
-
----
 
 ## Commands Added to [Commands.tsx](file:///m:/MOHAMMAD/Full%20Stack%20Develoment/Web%20Development/MERN/AgenticCoder/packages/cli/src/components/command-menu/Commands.tsx)
 
