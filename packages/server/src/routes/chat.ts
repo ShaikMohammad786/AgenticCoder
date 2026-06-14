@@ -17,7 +17,7 @@ import {
   type ModeType, 
   type ToolContracts
 } from "@agenticcoder/shared";
-import { buildSystemPrompt } from "../system-prompt";
+import { buildSystemPrompt } from "../system-prompts";
 import type { AuthenticatedEnv } from "../middleware/require-auth";
 import { requireCreditsBalance } from "../middleware/require-credits-balance";
 import { calculateCreditsForUsage } from "../lib/credits";
