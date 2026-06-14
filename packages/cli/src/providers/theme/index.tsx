@@ -7,36 +7,39 @@ import type { ThemeColors, Theme } from "../../theme";
 import { DEFAULT_THEME, THEMES } from "../../theme";
 
 const CONFIG_DIR = join(homedir(), ".agenticcoder");
-const THEME_PREFERENCES_PATH = join(CONFIG_DIR, "preferences.json");
+const PREFERENCES_PATH = join(CONFIG_DIR, "preferences.json");
 
-type ThemePreferences = {
-  themeName: string;
+type SavedPreferences = {
+  themeName?: string;
 };
+
+function loadPreferences(): SavedPreferences {
+  try {
+    return JSON.parse(readFileSync(PREFERENCES_PATH, "utf8")) as SavedPreferences;
+  } catch {
+    return {};
+  }
+}
+
+function savePreferences(updates: Partial<SavedPreferences>) {
+  try {
+    const current = loadPreferences();
+    const merged = { ...current, ...updates };
+    mkdirSync(CONFIG_DIR, { recursive: true });
+    writeFileSync(PREFERENCES_PATH, JSON.stringify(merged, null, 2), "utf8");
+  } catch {
+    // Ignore write failures
+  }
+}
 
 function getInitialTheme(): Theme {
-  try {
-    const preferences = JSON.parse(
-      readFileSync(THEME_PREFERENCES_PATH, "utf8"),
-    ) as Partial<ThemePreferences>;
-    const savedTheme = THEMES.find((theme) => theme.name === preferences.themeName);
-    return savedTheme ?? DEFAULT_THEME;
-  } catch {
-    return DEFAULT_THEME;
+  const prefs = loadPreferences();
+  if (prefs.themeName) {
+    const found = THEMES.find((t) => t.name === prefs.themeName);
+    if (found) return found;
   }
-};
-
-function persistTheme(theme: Theme) {
-  try {
-    mkdirSync(CONFIG_DIR, { recursive: true });
-    writeFileSync(
-      THEME_PREFERENCES_PATH,
-      JSON.stringify({ themeName: theme.name } satisfies ThemePreferences, null, 2),
-      "utf8",
-    );
-  } catch {
-    // Ignore preference write failures so theme switching still works for this session.
-  }
-};
+  return DEFAULT_THEME;
+}
 
 type ThemeContextValue = {
   colors: ThemeColors;
@@ -63,7 +66,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
 
   const setTheme = useCallback((theme: Theme) => {
     setCurrentTheme(theme);
-    persistTheme(theme);
+    savePreferences({ themeName: theme.name });
   }, []);
 
   return (

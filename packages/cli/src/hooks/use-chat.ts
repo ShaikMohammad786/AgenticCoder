@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useEffect, useCallback, useState } from "react";
 import { useChat as useAiChat } from "@ai-sdk/react";
 import {
   DefaultChatTransport,
@@ -11,6 +11,8 @@ import { type ModeType, type SupportedChatModelId, type ToolContracts } from "@a
 import { apiClient } from "../lib/api-client";
 import { getAuth } from "../lib/auth";
 import { executeLocalTool } from "../lib/local-tools";
+import { buildProjectContext } from "../lib/project-context";
+import { extractImageMentions } from "../lib/image-input";
 
 export type ChatMessageMetadata = {
   mode?: ModeType;
@@ -29,6 +31,35 @@ type ChatTools = {
 export type Message = UIMessage<ChatMessageMetadata, never, ChatTools>;
 
 export function useChat(sessionId: string, initialMessages: Message[]) {
+  // Cache project context so we only detect once per session
+  const projectContextRef = useRef<string | null>(null);
+  const projectContextLoadedRef = useRef(false);
+
+  // Bash streaming state (local to session, no provider needed)
+  const [bashOutput, setBashOutput] = useState("");
+  const [isBashStreaming, setIsBashStreaming] = useState(false);
+  const bashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const onBashOutput = useCallback((chunk: string) => {
+    setIsBashStreaming(true);
+    setBashOutput((prev) => {
+      const combined = prev + chunk;
+      const lines = combined.split("\n");
+      return lines.length > 100 ? lines.slice(-100).join("\n") : combined;
+    });
+    if (bashTimeoutRef.current) clearTimeout(bashTimeoutRef.current);
+    bashTimeoutRef.current = setTimeout(() => setIsBashStreaming(false), 500);
+  }, []);
+
+  useEffect(() => {
+    if (!projectContextLoadedRef.current) {
+      projectContextLoadedRef.current = true;
+      buildProjectContext().then((ctx) => {
+        projectContextRef.current = ctx;
+      });
+    }
+  }, []);
+
   const transport = useMemo(() => {
     return new DefaultChatTransport<Message>({
       api: apiClient.chat.$url().toString(),
@@ -55,6 +86,8 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
             messages: requestMessages,
             mode: message.metadata?.mode ?? metadata?.mode,
             model: message.metadata?.model ?? metadata?.model,
+            // Send project context (AGENT.md + detected framework info)
+            projectContext: projectContextRef.current ?? undefined,
           },
         }
       }
@@ -69,9 +102,19 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
       const mode = chat.messages.at(-1)?.metadata?.mode ?? "BUILD";
       const MAX_RETRIES = 1;
 
+      // Clear bash output when a new bash command starts
+      if (toolCall.toolName === "bash") {
+        setBashOutput("");
+      }
+
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-          const output = await executeLocalTool(toolCall.toolName, toolCall.input, mode);
+          const output = await executeLocalTool(
+            toolCall.toolName,
+            toolCall.input,
+            mode,
+            { onBashOutput },
+          );
           chat.addToolOutput({
             tool: toolCall.toolName as keyof ChatTools,
             toolCallId: toolCall.toolCallId,
@@ -100,14 +143,34 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     messages: chat.messages,
     status: chat.status,
     error: chat.error,
-    submit: (params: { userText: string; mode: ModeType; model: SupportedChatModelId }) => {
+    bashOutput,
+    isBashStreaming,
+    submit: async (params: { userText: string; mode: ModeType; model: SupportedChatModelId }) => {
+      // Extract image mentions (@file.png) and convert to multimodal parts
+      const { text, images } = await extractImageMentions(params.userText);
+
+      if (images.length > 0) {
+        return chat.sendMessage({
+          text,
+          metadata: {
+            mode: params.mode,
+            model: params.model,
+          },
+          experimental_attachments: images.map((img) => ({
+            name: img.path,
+            contentType: img.mimeType,
+            url: `data:${img.mimeType};base64,${img.base64}`,
+          })),
+        });
+      }
+
       return chat.sendMessage({
         text: params.userText,
         metadata: {
           mode: params.mode,
           model: params.model,
         },
-      })
+      });
     },
     abort: chat.stop,
     interrupt: chat.stop,

@@ -1,6 +1,8 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "fs/promises";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "path";
 import { toolInputSchemas, Mode, type ModeType } from "@agenticcoder/shared";
+import { createCheckpoint, cleanupCheckpoints } from "./checkpoint";
+import { isMcpTool, executeMcpTool } from "./mcp-client";
 
 const MAX_FILE_SIZE = 10_000;
 const MAX_RESULTS = 200;
@@ -218,11 +220,38 @@ function parseDefinitions(content: string, ext: string): SymbolDef[] {
   return defs;
 }
 
-// ── Tool execution ──
+// Track whether we've checkpointed this session
+let sessionCheckpointed = false;
 
-export async function executeLocalTool(toolName: string, input: unknown, mode: ModeType) {
+export type ToolCallbacks = {
+  onBashOutput?: (chunk: string) => void;
+};
+
+async function ensureCheckpoint() {
+  if (!sessionCheckpointed) {
+    sessionCheckpointed = true;
+    try {
+      await createCheckpoint();
+    } catch {
+      // Non-fatal — continue even if checkpoint fails
+    }
+  }
+}
+
+export async function executeLocalTool(
+  toolName: string,
+  input: unknown,
+  mode: ModeType,
+  callbacks?: ToolCallbacks,
+) {
   if (mode === Mode.PLAN && !PLAN_TOOLS.includes(toolName)) {
     throw new Error(`Tool ${toolName} is not available in PLAN mode`);
+  }
+
+  // Create checkpoint before any write operation
+  const WRITE_TOOLS = ["writeFile", "editFile", "searchReplace", "bash"];
+  if (WRITE_TOOLS.includes(toolName)) {
+    await ensureCheckpoint();
   }
 
   switch (toolName) {
@@ -319,12 +348,35 @@ export async function executeLocalTool(toolName: string, input: unknown, mode: M
         env: { ...process.env, TERM: "dumb" },
       });
       const timer = setTimeout(() => proc.kill(), timeout);
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
+
+      // Stream stdout chunks via callback if provided
+      const stdoutChunks: string[] = [];
+      const stderrChunks: string[] = [];
+
+      if (callbacks?.onBashOutput && proc.stdout) {
+        const reader = proc.stdout.getReader();
+        const decoder = new TextDecoder();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const text = decoder.decode(value);
+            stdoutChunks.push(text);
+            callbacks.onBashOutput(text);
+          }
+        } catch {
+          // Stream ended
+        }
+      } else {
+        stdoutChunks.push(await new Response(proc.stdout).text());
+      }
+
+      stderrChunks.push(await new Response(proc.stderr).text());
       const exitCode = await proc.exited;
       clearTimeout(timer);
+
+      const stdout = stdoutChunks.join("");
+      const stderr = stderrChunks.join("");
       return {
         stdout: truncate(stdout, MAX_OUTPUT),
         stderr: truncate(stderr, MAX_OUTPUT),
@@ -545,6 +597,10 @@ export async function executeLocalTool(toolName: string, input: unknown, mode: M
       };
     }
     default:
+      // Route MCP tools to the MCP client
+      if (isMcpTool(toolName)) {
+        return executeMcpTool(toolName, input as Record<string, unknown>);
+      }
       throw new Error(`Unknown tool: ${toolName}`);
   }
 };

@@ -11,15 +11,15 @@ export function RootLayout() {
     <ThemeProvider>
       <ToastProvider>
         <KeyboardLayerProvider>
-          <DialogProvider>
-            <PromptConfigProvider>
+          <PromptConfigProvider>
+            <DialogProvider>
               <ThemedRoot>
                 <Outlet />
               </ThemedRoot>
-            </PromptConfigProvider>
-          </DialogProvider>
+            </DialogProvider>
+          </PromptConfigProvider>
         </KeyboardLayerProvider>
       </ToastProvider>
     </ThemeProvider>
   );
-};
+};

@@ -8,7 +8,8 @@ import {
 import type { Command } from "./types";
 
 import { performLogin } from "../../lib/oauth";
-import { clearAuth } from "../../lib/auth";
+import { clearAuth, getAuth } from "../../lib/auth";
+import { undoToLastCheckpoint } from "../../lib/checkpoint";
 
 import { openBillingPortal, openUpgradeCheckout } from "../../lib/upgrade";
 
@@ -31,12 +32,69 @@ export const COMMANDS: Command[] = [
     },
   },
   {
+    name: "undo",
+    description: "Revert all AI changes since last checkpoint",
+    value: "/undo",
+    action: async (ctx) => {
+      ctx.toast.show({ message: "Reverting changes..." });
+      try {
+        const result = await undoToLastCheckpoint();
+        ctx.toast.show({
+          variant: result.success ? "success" : "error",
+          message: result.message,
+        });
+      } catch (error) {
+        ctx.toast.show({
+          variant: "error",
+          message: error instanceof Error ? error.message : "Undo failed",
+        });
+      }
+    },
+  },
+  {
+    name: "commit",
+    description: "Git commit all current changes",
+    value: "/commit",
+    action: async (ctx) => {
+      ctx.toast.show({ message: "Committing changes..." });
+      try {
+        const proc1 = Bun.spawn(["git", "add", "-A"], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+        await proc1.exited;
+        const statusProc = Bun.spawn(["git", "status", "--porcelain"], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+        const statusOutput = await new Response(statusProc.stdout).text();
+        await statusProc.exited;
+        if (!statusOutput.trim()) {
+          ctx.toast.show({ message: "Nothing to commit — working tree clean." });
+          return;
+        }
+        const diffProc = Bun.spawn(["git", "diff", "--cached", "--stat"], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+        const diffStat = await new Response(diffProc.stdout).text();
+        await diffProc.exited;
+        const fileCount = diffStat.trim().split("\n").length - 1;
+        const commitMsg = `chore: AgenticCoder changes (${fileCount} file${fileCount !== 1 ? "s" : ""})`;
+        const proc2 = Bun.spawn(["git", "commit", "-m", commitMsg], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+        await proc2.exited;
+        const exitCode = await proc2.exited;
+        if (exitCode === 0) {
+          ctx.toast.show({ variant: "success", message: `Committed: ${commitMsg}` });
+        } else {
+          ctx.toast.show({ variant: "error", message: "Git commit failed" });
+        }
+      } catch (error) {
+        ctx.toast.show({
+          variant: "error",
+          message: error instanceof Error ? error.message : "Commit failed",
+        });
+      }
+    },
+  },
+  {
     name: "help",
     description: "Show all available commands",
     value: "/help",
     action: (ctx) => {
       ctx.toast.show({
-        message: "Commands: /new /clear /agents /models /sessions /theme /login /logout /upgrade /usage /help /status /exit",
+        message: "Commands: /new /clear /undo /commit /agents /models /sessions /theme /login /logout /upgrade /usage /help /status /exit",
       });
     },
   },
@@ -104,6 +162,11 @@ export const COMMANDS: Command[] = [
     description: "Sign in with your browser",
     value: "/login",
     action: async (ctx) => {
+      const auth = getAuth();
+      if (auth) {
+        ctx.toast.show({ message: "Already signed in." });
+        return;
+      }
       ctx.toast.show({ message: "Opening browser to sign in..." });
 
       try {

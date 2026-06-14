@@ -32,8 +32,10 @@ const sessionLocationSchema = z.object({
 });
 
 function ChatMessage(
-  { msg }: {
-    msg: Message
+  { msg, bashOutput, isBashStreaming }: {
+    msg: Message;
+    bashOutput?: string;
+    isBashStreaming?: boolean;
   }
 ) {
   if (msg.role === "user") {
@@ -53,6 +55,8 @@ function ChatMessage(
       durationMs={msg.metadata?.durationMs}
       usage={msg.metadata?.usage}
       streaming={false}
+      bashOutput={bashOutput}
+      isBashStreaming={isBashStreaming}
     />
   );
 };
@@ -67,7 +71,7 @@ function SessionChat({
   const [initialMessages] = useState(() => session.messages as unknown as Message[]);
   const { mode, model } = usePromptConfig();
   const { isTopLayer } = useKeyboardLayer();
-  const { messages, status, submit, abort, interrupt, error } = useChat(
+  const { messages, status, submit, abort, interrupt, error, bashOutput, isBashStreaming } = useChat(
     session.id,
     initialMessages
   );
@@ -105,7 +109,7 @@ function SessionChat({
       interruptible={status === "submitted" || status === "streaming"}
     >
       {messages.map((msg) => (
-        <ChatMessage key={msg.id} msg={msg} />
+        <ChatMessage key={msg.id} msg={msg} bashOutput={bashOutput} isBashStreaming={isBashStreaming} />
       ))}
       {error && <ErrorMessage message={error.message} />}
     </SessionShell>

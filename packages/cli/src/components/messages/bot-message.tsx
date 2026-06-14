@@ -15,6 +15,8 @@ type Props = {
   durationMs?: number;
   usage?: { inputTokens?: number; outputTokens?: number };
   streaming?: boolean;
+  bashOutput?: string;
+  isBashStreaming?: boolean;
 };
 
 function formatToolName(name: string): string {
@@ -70,6 +72,8 @@ export function BotMessage({
   durationMs,
   usage,
   streaming = false,
+  bashOutput = "",
+  isBashStreaming = false,
 }: Props) {
   const { colors } = useTheme();
   return (
@@ -102,28 +106,47 @@ export function BotMessage({
                 part.type === "dynamic-tool" ? part.toolName : part.type.slice("tool-".length);
               const isPending = part.state !== "output-available" && part.state !== "output-error";
               const isError = part.state === "output-error";
+              const isBash = toolName === "bash";
+              const showLiveOutput = isBash && isPending && isBashStreaming && bashOutput.trim().length > 0;
 
               return (
-                <box
-                  key={part.toolCallId}
-                  border={["left"]}
-                  borderColor={isError ? colors.error : colors.thinkingBorder}
-                  customBorderChars={{
-                    ...EmptyBorder,
-                    vertical: "│",
-                  }}
-                  width="100%"
-                  paddingX={2}
-                >
-                  <text attributes={TextAttributes.DIM}>
-                    <em fg={isError ? colors.error : colors.info}>
-                      {isPending ? "⠋ " : isError ? "✗ " : "✓ "}
-                      {formatToolName(toolName)}:
-                    </em>{" "}
-                    {formatToolArgs(part)}
-                    {isPending ? " …" : ""}
-                    {isError ? ` ${part.errorText}` : ""}
-                  </text>
+                <box key={part.toolCallId} width="100%">
+                  <box
+                    border={["left"]}
+                    borderColor={isError ? colors.error : colors.thinkingBorder}
+                    customBorderChars={{
+                      ...EmptyBorder,
+                      vertical: "│",
+                    }}
+                    width="100%"
+                    paddingX={2}
+                  >
+                    <text attributes={TextAttributes.DIM}>
+                      <em fg={isError ? colors.error : colors.info}>
+                        {isPending ? "⠋ " : isError ? "✗ " : "✓ "}
+                        {formatToolName(toolName)}:
+                      </em>{" "}
+                      {formatToolArgs(part)}
+                      {isPending ? " …" : ""}
+                      {isError ? ` ${part.errorText}` : ""}
+                    </text>
+                  </box>
+                  {showLiveOutput && (
+                    <box
+                      border={["left"]}
+                      borderColor={colors.thinkingBorder}
+                      customBorderChars={{
+                        ...EmptyBorder,
+                        vertical: "┊",
+                      }}
+                      width="100%"
+                      paddingX={4}
+                    >
+                      <text attributes={TextAttributes.DIM}>
+                        {bashOutput.trim().split("\n").slice(-8).join("\n")}
+                      </text>
+                    </box>
+                  )}
                 </box>
               );
             }
