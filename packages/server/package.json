@@ -8,17 +8,20 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
-    // "postinstall": "bun run --cwd ../database db:generate"
+    "postinstall": "bun run --cwd  ../database db:generate"
   },
   "dependencies": {
+    "@agenticcoder/database": "workspace:*",
+    "@agenticcoder/shared": "workspace:*",
     "@ai-sdk/anthropic": "^3.0.68",
     "@ai-sdk/openai": "^3.0.52",
     "@clerk/backend": "^3.2.8",
     "@hono/zod-validator": "^0.7.6",
-    "@agenticcoder/database": "workspace:*",
-    "@agenticcoder/shared": "workspace:*",
+    "@openrouter/ai-sdk-provider": "^2.9.1",
     "@polar-sh/sdk": "^0.47.1",
-    "ai": "^6.0.154",
+    "@sentry/bun": "^10.57.0",
+    "@sentry/hono": "^10.57.0",
+    "ai": "^6.0.205",
     "dotenv": "^17.4.1",
     "hono": "^4.12.12",
     "zod": "^4.3.6"
