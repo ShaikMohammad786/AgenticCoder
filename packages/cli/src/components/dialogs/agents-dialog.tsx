@@ -1,28 +1,38 @@
 import { useCallback } from "react";
+import { TextAttributes } from "@opentui/core";
 import { useDialog } from "../../providers/dialog";
+import { useTheme } from "../../providers/theme";
 import { DialogSearchList } from "../dialog-search-list";
 import { Mode, type ModeType } from "@agenticcoder/shared";
 
-const AVAILABLE_MODES: ModeType[] = [Mode.BUILD, Mode.PLAN];
+const AGENTS: { mode: ModeType; label: string; description: string }[] = [
+  { 
+    mode: Mode.BUILD, 
+    label: "Build", 
+    description: "Full read/write access · implement changes directly" 
+  },
+  { 
+    mode: Mode.PLAN, 
+    label: "Plan", 
+    description: "Read-only analysis · explore, research, plan" 
+  },
+];
 
 type AgentsDialogContentProps = {
   currentMode: ModeType;
   onSelectMode: (mode: ModeType) => void;
 };
 
-function getModeLabel(mode: ModeType) {
-  return mode === Mode.PLAN ? "Plan" : "Build";
-}
-
 export const AgentsDialogContent = ({ 
   currentMode, 
   onSelectMode 
 }: AgentsDialogContentProps) => {
   const dialog = useDialog();
+  const { colors } = useTheme();
 
   const handleSelect = useCallback(
-    (nextMode: ModeType) => {
-      onSelectMode(nextMode);
+    (agent: typeof AGENTS[number]) => {
+      onSelectMode(agent.mode);
       dialog.close();
     },
     [onSelectMode, dialog],
@@ -30,16 +40,25 @@ export const AgentsDialogContent = ({
 
   return (
     <DialogSearchList
-      items={AVAILABLE_MODES}
+      items={AGENTS}
       onSelect={handleSelect}
-      filterFn={(item, query) => getModeLabel(item).toLowerCase().includes(query.toLowerCase())}
+      filterFn={(item, query) => item.label.toLowerCase().includes(query.toLowerCase())}
       renderItem={(item, isSelected) => (
-        <text selectable={false} fg={isSelected ? "black" : "white"}>
-          {item === currentMode ? " • " : "   "}
-          {getModeLabel(item)}
-        </text>
+        <box flexDirection="row" gap={1}>
+          <text selectable={false} fg={isSelected ? "black" : "white"}>
+            {item.mode === currentMode ? " ◉ " : " ○ "}
+            {item.label}
+          </text>
+          <text 
+            selectable={false} 
+            attributes={TextAttributes.DIM} 
+            fg={isSelected ? "black" : colors.dimSeparator}
+          >
+            {item.description}
+          </text>
+        </box>
       )}
-      getKey={(item) => item}
+      getKey={(item) => item.mode}
       placeholder="Search agents"
       emptyText="No matching agents"
     />

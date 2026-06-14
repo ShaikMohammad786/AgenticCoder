@@ -55,6 +55,7 @@
         "@agenticcoder/shared": "workspace:*",
         "@ai-sdk/anthropic": "^3.0.68",
         "@ai-sdk/openai": "^3.0.52",
+        "@ai-sdk/provider-utils": "^4.0.29",
         "@clerk/backend": "^3.2.8",
         "@hono/zod-validator": "^0.7.6",
         "@openrouter/ai-sdk-provider": "^2.9.1",

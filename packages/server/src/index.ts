@@ -3,6 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { sentry } from "@sentry/hono/bun";
 
 import { requireAuth } from "./middleware/require-auth";
+import { rateLimit } from "./middleware/rate-limit";
 import sessions from "./routes/sessions";
 import chat from "./routes/chat";
 import auth from "./routes/auth";
@@ -35,6 +36,7 @@ app.onError((error, c) => {
 
 app.use("/sessions/*", requireAuth);
 app.use("/chat/*", requireAuth);
+app.use("/chat/*", rateLimit);
 app.use("/billing/checkout", requireAuth);
 app.use("/billing/portal", requireAuth);
 

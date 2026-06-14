@@ -1,9 +1,10 @@
 import { hc } from "hono/client";
 import type { AppType } from "@agenticcoder/server";
 import { clearAuth, getAuth } from "./auth";
+import { config } from "./config";
 
 export const apiClient = hc<AppType>(
-  process.env.API_URL ?? "http://localhost:3000",
+  config.apiUrl,
   {
     fetch: async (
       input: Parameters<typeof fetch>[0],

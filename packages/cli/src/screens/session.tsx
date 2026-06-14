@@ -51,6 +51,7 @@ function ChatMessage(
       model={msg.metadata?.model ?? "unknown"}
       mode={msg.metadata?.mode ?? "BUILD"}
       durationMs={msg.metadata?.durationMs}
+      usage={msg.metadata?.usage}
       streaming={false}
     />
   );

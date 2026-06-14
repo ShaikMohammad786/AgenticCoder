@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-// import { HTTPException } from "hono/http-exception";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { db } from "@agenticcoder/database/client";
@@ -25,26 +24,18 @@ const app = new Hono<AuthenticatedEnv>()
 
     const sessions = await db.session.findMany({
       where: { userId },
-      orderBy: { createdAt: "desc" },
+      orderBy: { updatedAt: "desc" },
       select: {
         id: true,
         title: true,
         createdAt: true,
+        updatedAt: true,
       },
     });
 
     return c.json(sessions);
   })
   .get("/:id", async (c) => {
-    // MOCK: Uncomment to simulate slow session loading
-    // await new Promise((r) => setTimeout(r, 5000))
-
-    // MOCK: Uncomment to simulate session loading error
-    // throw new HTTPException(
-    //   500, 
-    //   { message: "Mock error: session loading failed" }
-    // )
-
     const id = c.req.param("id");
     const userId = c.get("userId");
     
@@ -59,15 +50,6 @@ const app = new Hono<AuthenticatedEnv>()
     return c.json(session);
   })
   .post("/", requireCreditsBalance, createSessionValidator, async (c) => {
-    // MOCK: Uncomment to simulate slow session loading
-    // await new Promise((r) => setTimeout(r, 5000))
-
-    // MOCK: Uncomment to simulate session loading error
-    // throw new HTTPException(
-    //   500, 
-    //   { message: "Mock error: session loading failed" }
-    // )
-
     const userId = c.get("userId");
     const data = c.req.valid("json");
 
@@ -79,6 +61,46 @@ const app = new Hono<AuthenticatedEnv>()
     });
 
     return c.json(session, 201);
+  })
+  .delete("/:id", async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("userId");
+
+    const session = await db.session.findUnique({
+      where: { id, userId },
+    });
+
+    if (!session) {
+      return c.json({ error: "Session not found" }, 404);
+    }
+
+    await db.session.delete({
+      where: { id, userId },
+    });
+
+    return c.json({ success: true });
+  })
+  .patch("/:id", zValidator("json", z.object({ title: z.string().min(1).max(200) }), (result, c) => {
+    if (!result.success) return c.json({ error: "Invalid title" }, 400);
+  }), async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("userId");
+    const { title } = c.req.valid("json");
+
+    const session = await db.session.findUnique({
+      where: { id, userId },
+    });
+
+    if (!session) {
+      return c.json({ error: "Session not found" }, 404);
+    }
+
+    const updated = await db.session.update({
+      where: { id, userId },
+      data: { title },
+    });
+
+    return c.json(updated);
   });
 
 export default app;

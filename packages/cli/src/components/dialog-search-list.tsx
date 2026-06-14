@@ -9,6 +9,7 @@ const MAX_VISIBLE_ITEMS = 6;
 type DialogSearchListProps<T> = {
   items: T[];
   onSelect: (item: T) => void;
+  onDelete?: (item: T) => void;
   onHighlight?: (item: T) => void;
   filterFn: (item: T, query: string) => boolean;
   renderItem: (item: T, isSelected: boolean) => ReactNode;
@@ -20,6 +21,7 @@ type DialogSearchListProps<T> = {
 export function DialogSearchList<T>({
   items,
   onSelect,
+  onDelete,
   onHighlight,
   filterFn,
   renderItem,
@@ -57,6 +59,11 @@ export function DialogSearchList<T>({
       const item = filtered[selectedIndex];
       if (item) {
         onSelect(item);
+      }
+    } else if ((key.name === "backspace" || key.name === "delete") && onDelete && !searchValue) {
+      const item = filtered[selectedIndex];
+      if (item) {
+        onDelete(item);
       }
     } else if (key.name === "up") {
       setSelectedIndex((i) => {

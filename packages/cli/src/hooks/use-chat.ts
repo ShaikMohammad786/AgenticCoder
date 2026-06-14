@@ -65,25 +65,33 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     id: sessionId,
     messages: initialMessages,
     transport,
-    onToolCall({ toolCall }) {
+    async onToolCall({ toolCall }) {
       const mode = chat.messages.at(-1)?.metadata?.mode ?? "BUILD";
+      const MAX_RETRIES = 1;
 
-      void executeLocalTool(toolCall.toolName, toolCall.input, mode)
-        .then((output) =>
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          const output = await executeLocalTool(toolCall.toolName, toolCall.input, mode);
           chat.addToolOutput({
             tool: toolCall.toolName as keyof ChatTools,
             toolCallId: toolCall.toolCallId,
             output,
-          }),
-        )
-        .catch((error) =>
-          chat.addToolOutput({
-            tool: toolCall.toolName as keyof ChatTools,
-            toolCallId: toolCall.toolCallId,
-            state: "output-error",
-            errorText: error instanceof Error ? error.message : String(error),
-          }),
-        );
+          });
+          return;
+        } catch (error) {
+          // On last attempt, report the error
+          if (attempt === MAX_RETRIES) {
+            const errorText = error instanceof Error ? error.message : String(error);
+            chat.addToolOutput({
+              tool: toolCall.toolName as keyof ChatTools,
+              toolCallId: toolCall.toolCallId,
+              state: "output-error",
+              errorText,
+            });
+          }
+          // Otherwise retry silently
+        }
+      }
     },
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
   });

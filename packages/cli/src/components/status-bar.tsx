@@ -1,7 +1,10 @@
+import { basename } from "path";
 import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../providers/theme";
 import { usePromptConfig } from "../providers/prompt-config";
 import { Mode } from "@agenticcoder/shared";
+
+const PROJECT_NAME = basename(process.cwd());
 
 export function StatusBar() {
   const { mode, model } = usePromptConfig();
@@ -9,7 +12,12 @@ export function StatusBar() {
 
   return (
     <box flexDirection="row" gap={1}>
-      
+      <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+        {PROJECT_NAME}
+      </text>
+      <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+        ›
+      </text>
       <text fg={mode === Mode.PLAN ? colors.planMode : colors.primary}>
         {mode === Mode.PLAN ? "Plan" : "Build"}
       </text>

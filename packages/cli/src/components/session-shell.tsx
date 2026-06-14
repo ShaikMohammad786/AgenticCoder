@@ -1,8 +1,10 @@
 import { TextAttributes } from "@opentui/core";
 import type { ReactNode } from "react";
-import { InputBar } from "./input-bar";
+import { InputBar } from "./Input-bar";
 import { Spinner } from "./spinner";
 import { usePromptConfig } from "../providers/prompt-config";
+import { Mode } from "@agenticcoder/shared";
+import { useTheme } from "../providers/theme";
 
 type Props = {
   children?: ReactNode;
@@ -20,6 +22,7 @@ export function SessionShell({
   interruptible = false,
 }: Props) {
   const { mode } = usePromptConfig();
+  const { colors } = useTheme();
 
   return (
     <box
@@ -56,8 +59,13 @@ export function SessionShell({
         </box>
 
         <box flexDirection="row" gap={1} flexShrink={0} marginLeft="auto">
-          <text>tab</text>
-          <text attributes={TextAttributes.DIM}>agents</text>
+          <text attributes={TextAttributes.DIM}>tab</text>
+          <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>
+          <text attributes={TextAttributes.DIM}>
+            {mode === Mode.PLAN ? "plan" : "build"}
+          </text>
+          <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>·</text>
+          <text attributes={TextAttributes.DIM}>/ commands</text>
         </box>
       </box>
     </box>

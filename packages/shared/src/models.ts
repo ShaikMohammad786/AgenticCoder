@@ -1,9 +1,11 @@
+// ── OpenRouter free models ──
+
 export type ModelPricing = {
   inputUsdPerMillionTokens: number;
   outputUsdPerMillionTokens: number;
 };
 
-export type SupportedProvider = "anthropic" | "openai";
+export type SupportedProvider = "openrouter";
 
 type SupportedChatModelDefinition = {
   id: string;
@@ -13,52 +15,79 @@ type SupportedChatModelDefinition = {
 
 export const SUPPORTED_CHAT_MODELS = [
   {
-    id: "claude-sonnet-4-6",
-    provider: "anthropic",
-    pricing: {
-      inputUsdPerMillionTokens: 3,
-      outputUsdPerMillionTokens: 15,
-    },
+    id: "qwen/qwen3-coder:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
   },
   {
-    id: "claude-haiku-4-5",
-    provider: "anthropic",
-    pricing: {
-      inputUsdPerMillionTokens: 1,
-      outputUsdPerMillionTokens: 5,
-    },
+    id: "nvidia/nemotron-3-ultra-550b-a55b:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
   },
   {
-    id: "claude-opus-4-6",
-    provider: "anthropic",
-    pricing: {
-      inputUsdPerMillionTokens: 5,
-      outputUsdPerMillionTokens: 25,
-    },
+    id: "nvidia/nemotron-3-super-120b-a12b:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
   },
   {
-    id: "gpt-5.4",
-    provider: "openai",
-    pricing: {
-      inputUsdPerMillionTokens: 2.5,
-      outputUsdPerMillionTokens: 15,
-    },
+    id: "google/gemma-4-31b-it:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
   },
   {
-    id: "gpt-5.4-mini",
-    provider: "openai",
-    pricing: {
-      inputUsdPerMillionTokens: 0.75,
-      outputUsdPerMillionTokens: 4.5,
-    },
+    id: "google/gemma-4-26b-a4b-it:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
   },
   {
-    id: "gpt-5.4-nano",
-    provider: "openai",
-    pricing: {
-      inputUsdPerMillionTokens: 0.2,
-      outputUsdPerMillionTokens: 1.25,
-    },
+    id: "qwen/qwen3-next-80b-a3b-instruct:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
+  },
+  {
+    id: "nvidia/nemotron-3-nano-30b-a3b:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
+  },
+  {
+    id: "nex-agi/nex-n2-pro:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
+  },
+  {
+    id: "poolside/laguna-m.1:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
+  },
+  {
+    id: "poolside/laguna-xs.2:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
+  },
+  {
+    id: "openai/gpt-oss-120b:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
+  },
+  {
+    id: "openai/gpt-oss-20b:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
+  },
+  {
+    id: "meta-llama/llama-3.3-70b-instruct:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
+  },
+  {
+    id: "nousresearch/hermes-3-llama-3.1-405b:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
+  },
+  {
+    id: "nvidia/nemotron-nano-9b-v2:free",
+    provider: "openrouter",
+    pricing: { inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0 },
   },
 ] as const satisfies readonly SupportedChatModelDefinition[];
 
@@ -69,4 +98,4 @@ export function findSupportedChatModel(modelId: string) {
   return SUPPORTED_CHAT_MODELS.find((model) => model.id === modelId);
 }
 
-export const DEFAULT_CHAT_MODEL_ID: SupportedChatModelId = "claude-opus-4-6";
+export const DEFAULT_CHAT_MODEL_ID: SupportedChatModelId = "qwen/qwen3-coder:free";

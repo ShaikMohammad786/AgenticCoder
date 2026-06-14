@@ -13,6 +13,7 @@ type Props = {
   model: string;
   mode: ModeType;
   durationMs?: number;
+  usage?: { inputTokens?: number; outputTokens?: number };
   streaming?: boolean;
 };
 
@@ -30,6 +31,11 @@ function formatToolArgs(tc: ToolPart): string {
   if (!("input" in tc) || tc.input == null) return "";
   if (typeof tc.input !== "object") return String(tc.input);
   return Object.values(tc.input).map(String).join(" ");
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
 }
 
 type PartGroup = {
@@ -62,6 +68,7 @@ export function BotMessage({
   model,
   mode,
   durationMs,
+  usage,
   streaming = false,
 }: Props) {
   const { colors } = useTheme();
@@ -93,12 +100,14 @@ export function BotMessage({
             if (isToolPart(part)) {
               const toolName =
                 part.type === "dynamic-tool" ? part.toolName : part.type.slice("tool-".length);
+              const isPending = part.state !== "output-available" && part.state !== "output-error";
+              const isError = part.state === "output-error";
 
               return (
                 <box
                   key={part.toolCallId}
                   border={["left"]}
-                  borderColor={colors.thinkingBorder}
+                  borderColor={isError ? colors.error : colors.thinkingBorder}
                   customBorderChars={{
                     ...EmptyBorder,
                     vertical: "│",
@@ -107,12 +116,13 @@ export function BotMessage({
                   paddingX={2}
                 >
                   <text attributes={TextAttributes.DIM}>
-                    <em fg={colors.info}>{formatToolName(toolName)}:</em> {formatToolArgs(part)}
-                    {part.state !== "output-available" && part.state !== "output-error" 
-                      ? " …" 
-                      : ""
-                    }
-                    {part.state === "output-error" ? ` ${part.errorText}` : ""}
+                    <em fg={isError ? colors.error : colors.info}>
+                      {isPending ? "⠋ " : isError ? "✗ " : "✓ "}
+                      {formatToolName(toolName)}:
+                    </em>{" "}
+                    {formatToolArgs(part)}
+                    {isPending ? " …" : ""}
+                    {isError ? ` ${part.errorText}` : ""}
                   </text>
                 </box>
               );
@@ -149,6 +159,16 @@ export function BotMessage({
                 </text>
                 <text attributes={TextAttributes.DIM}>
                   {prettyMs(durationMs)}
+                </text>
+              </>
+            )}
+            {usage && (usage.inputTokens != null || usage.outputTokens != null) && (
+              <>
+                <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+                  ›
+                </text>
+                <text attributes={TextAttributes.DIM}>
+                  {formatTokens(usage.inputTokens ?? 0)}↑ {formatTokens(usage.outputTokens ?? 0)}↓
                 </text>
               </>
             )}

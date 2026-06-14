@@ -60,6 +60,29 @@ export const SessionsDialogContent = () => {
     [close, navigate],
   );
 
+  const handleDelete = useCallback(
+    async (session: Session) => {
+      try {
+        const res = await apiClient.sessions[":id"].$delete({
+          param: { id: session.id },
+        });
+
+        if (!res.ok) {
+          throw new Error(await getErrorMessage(res));
+        }
+
+        setSessions((prev) => prev.filter((s) => s.id !== session.id));
+        show({ variant: "success", message: `Deleted "${session.title}"` });
+      } catch (error) {
+        show({
+          variant: "error",
+          message: error instanceof Error ? error.message : "Failed to delete session",
+        });
+      }
+    },
+    [show],
+  );
+
   if (loading) {
     return (
       <box flexDirection="column">
@@ -69,28 +92,34 @@ export const SessionsDialogContent = () => {
   }
 
   return (
-    <DialogSearchList
-      items={sessions}
-      onSelect={handleSelect}
-      filterFn={(s, query) => s.title.toLowerCase().includes(query.toLowerCase())}
-      renderItem={(session, isSelected) => (
-        <>
-          <text selectable={false} fg={isSelected ? "black" : "white"}>
-            {session.title}
-          </text>
-          <box flexGrow={1} />
-          <text
-            selectable={false}
-            fg={isSelected ? "black" : undefined}
-            attributes={TextAttributes.DIM}
-          >
-            {format(new Date(session.createdAt), "hh:mm a")}
-          </text>
-        </>
-      )}
-      getKey={(s) => s.id}
-      placeholder="Search sessions"
-      emptyText="No matching sessions"
-    />
+    <box flexDirection="column" gap={0}>
+      <DialogSearchList
+        items={sessions}
+        onSelect={handleSelect}
+        onDelete={handleDelete}
+        filterFn={(s, query) => s.title.toLowerCase().includes(query.toLowerCase())}
+        renderItem={(session, isSelected) => (
+          <>
+            <text selectable={false} fg={isSelected ? "black" : "white"}>
+              {session.title}
+            </text>
+            <box flexGrow={1} />
+            <text
+              selectable={false}
+              fg={isSelected ? "black" : undefined}
+              attributes={TextAttributes.DIM}
+            >
+              {format(new Date(session.createdAt), "hh:mm a")}
+            </text>
+          </>
+        )}
+        getKey={(s) => s.id}
+        placeholder="Search sessions"
+        emptyText="No matching sessions"
+      />
+      <text attributes={TextAttributes.DIM}>
+        {"  ⏎ open · ⌫ delete"}
+      </text>
+    </box>
   );
 };

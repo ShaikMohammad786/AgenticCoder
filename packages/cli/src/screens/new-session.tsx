@@ -17,7 +17,7 @@ const newSessionStateSchema = z.object({
 export function NewSession() {
   const navigate = useNavigate();
   const location = useLocation();
-//   const toast = useToast();
+  const toast = useToast();
   const hasStartedRef = useRef(false);
 
   const state = useMemo(() => {

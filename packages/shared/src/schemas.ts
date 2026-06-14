@@ -40,6 +40,38 @@ export const toolInputSchemas = {
     description: z.string().optional().describe("Short description of the command"),
     timeout: z.number().optional().describe("Timeout in milliseconds"),
   }),
+  listCodeDefinitions: z.object({
+    path: z.string().describe("Relative path to the source file to analyze"),
+  }),
+  gitStatus: z.object({}),
+  gitDiff: z.object({
+    ref: z.string().optional().describe("Git ref to diff against (default: working tree changes)"),
+    path: z.string().optional().describe("Limit diff to a specific file path"),
+  }),
+  gitLog: z.object({
+    count: z.number().default(10).describe("Number of commits to show"),
+    path: z.string().optional().describe("Limit history to a specific file"),
+  }),
+  fetchUrl: z.object({
+    url: z.string().url().describe("URL to fetch"),
+  }),
+  searchReplace: z.object({
+    path: z.string().describe("Relative path to the file"),
+    search: z.string().describe("Text or regex pattern to search for"),
+    replace: z.string().describe("Replacement text"),
+    isRegex: z.boolean().default(false).describe("Treat search as regex pattern"),
+  }),
+  thinkOut: z.object({
+    thought: z.string().describe("Your internal reasoning or analysis"),
+  }),
+  fileInfo: z.object({
+    path: z.string().describe("Relative path to the file"),
+  }),
+  gitBlame: z.object({
+    path: z.string().describe("Relative path to the file"),
+    startLine: z.number().optional().describe("Start line number"),
+    endLine: z.number().optional().describe("End line number"),
+  }),
 } as const;
 
 export const readOnlyToolContracts = {
@@ -56,9 +88,40 @@ export const readOnlyToolContracts = {
     inputSchema: toolInputSchemas.glob,
   }),
   grep: tool({
-    description:
-      "Search file contents with a regular expression under the current project directory.",
+    description: "Search file contents with a regular expression under the current project directory.",
     inputSchema: toolInputSchemas.grep,
+  }),
+  listCodeDefinitions: tool({
+    description: "Parse a source file and list all top-level symbols (functions, classes, types, interfaces, exports).",
+    inputSchema: toolInputSchemas.listCodeDefinitions,
+  }),
+  gitStatus: tool({
+    description: "Show the current git working tree status including staged, unstaged, and untracked files.",
+    inputSchema: toolInputSchemas.gitStatus,
+  }),
+  gitDiff: tool({
+    description: "Show git diff output for working tree changes or between refs.",
+    inputSchema: toolInputSchemas.gitDiff,
+  }),
+  gitLog: tool({
+    description: "Show recent git commit history with hashes, authors, and messages.",
+    inputSchema: toolInputSchemas.gitLog,
+  }),
+  fetchUrl: tool({
+    description: "Fetch content from a URL and return it as text. Useful for reading documentation or APIs.",
+    inputSchema: toolInputSchemas.fetchUrl,
+  }),
+  thinkOut: tool({
+    description: "Use this tool to think through complex problems step by step. Your reasoning will be recorded but no action is taken.",
+    inputSchema: toolInputSchemas.thinkOut,
+  }),
+  fileInfo: tool({
+    description: "Get file metadata including size, modification time, and type. Useful for understanding file properties without reading contents.",
+    inputSchema: toolInputSchemas.fileInfo,
+  }),
+  gitBlame: tool({
+    description: "Show git blame for a file — who last modified each line, when, and in which commit.",
+    inputSchema: toolInputSchemas.gitBlame,
   }),
 } as const;
 
@@ -75,6 +138,10 @@ export const buildToolContracts = {
   bash: tool({
     description: "Run a shell command in the current project directory.",
     inputSchema: toolInputSchemas.bash,
+  }),
+  searchReplace: tool({
+    description: "Search and replace text in a file, with optional regex support. Supports multiple occurrences.",
+    inputSchema: toolInputSchemas.searchReplace,
   }),
 } as const;
 

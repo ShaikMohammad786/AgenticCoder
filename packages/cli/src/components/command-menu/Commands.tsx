@@ -22,6 +22,35 @@ export const COMMANDS: Command[] = [
     },
   },
   {
+    name: "clear",
+    description: "Clear chat and start fresh",
+    value: "/clear",
+    action: (ctx) => {
+      ctx.navigate("/");
+      ctx.toast.show({ message: "Chat cleared" });
+    },
+  },
+  {
+    name: "help",
+    description: "Show all available commands",
+    value: "/help",
+    action: (ctx) => {
+      ctx.toast.show({
+        message: "Commands: /new /clear /agents /models /sessions /theme /login /logout /upgrade /usage /help /status /exit",
+      });
+    },
+  },
+  {
+    name: "status",
+    description: "Show current configuration",
+    value: "/status",
+    action: (ctx) => {
+      ctx.toast.show({
+        message: `Mode: ${ctx.mode} · CWD: ${process.cwd()}`,
+      });
+    },
+  },
+  {
     name: "agents",
     description: "Switch agents",
     value: "/agents",

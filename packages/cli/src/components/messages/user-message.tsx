@@ -1,4 +1,5 @@
 import { Mode, type ModeType } from "@agenticcoder/shared";
+import { TextAttributes } from "@opentui/core";
 import { EmptyBorder } from "../border";
 import { useTheme } from "../../providers/theme";
 
@@ -9,12 +10,14 @@ type Props = {
 
 export function UserMessage({ message, mode }: Props) {
   const { colors } = useTheme();
+  const borderColor = mode === Mode.PLAN ? colors.planMode : colors.primary;
 
   return (
     <box width="100%" alignItems="center">
       <box
         border={["left"]}
-        borderColor={mode === Mode.PLAN ? colors.planMode : colors.primary}        width="100%"
+        borderColor={borderColor}
+        width="100%"
         customBorderChars={{
           ...EmptyBorder,
           vertical: "┃",
@@ -28,7 +31,12 @@ export function UserMessage({ message, mode }: Props) {
           backgroundColor={colors.surface}
           width="100%"
         >
-          <text>{message}</text>
+          <box flexDirection="row" justifyContent="space-between" width="100%">
+            <text>{message}</text>
+            <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+              {new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </text>
+          </box>
         </box>
       </box>
     </box>
