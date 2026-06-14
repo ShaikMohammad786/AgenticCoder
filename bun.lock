@@ -11,12 +11,13 @@
     "packages/cli": {
       "name": "@agenticcoder/cli",
       "dependencies": {
+        "@agenticcoder/database": "workspace:*",
         "@agenticcoder/shared": "workspace:*",
         "@ai-sdk/react": "^3.0.186",
         "@opentui/core": "^0.1.97",
         "@opentui/react": "^0.1.97",
         "ai": "^6.0.184",
-        "date-fns": "^4.1.0",
+        "date-fns": "^4.4.0",
         "eventsource-parser": "^3.1.0",
         "hono": "^4.12.12",
         "open": "^11.0.0",

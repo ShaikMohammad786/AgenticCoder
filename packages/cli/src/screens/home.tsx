@@ -1,10 +1,9 @@
 import { useCallback } from "react";
 import { useNavigate } from "react-router";
 import { Header } from "../components/Header";
-import { InputBar } from "../components/Input_bar";
+import { InputBar } from "../components/Input-bar";
 import { usePromptConfig } from "../providers/prompt-config";
 import { TextAttributes } from "@opentui/core";
-import { Spinner } from "../components/spinner";
 
 export function Home() {
   const navigate = useNavigate();
@@ -34,7 +33,6 @@ export function Home() {
           <text>tab</text>
           <text attributes={TextAttributes.DIM}>agents</text>
         </box>
-      
       </box>
     </box>
   );

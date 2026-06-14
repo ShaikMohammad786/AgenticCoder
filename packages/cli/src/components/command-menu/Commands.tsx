@@ -1,112 +1,147 @@
-import { Command } from "./types";
+import { SUPPORTED_CHAT_MODELS } from "@agenticcoder/shared";
+import { 
+  AgentsDialogContent,
+  ModelsDialogContent,
+  SessionsDialogContent,
+  ThemeDialogContent,
+} from "../dialogs";
+import type { Command } from "./types";
 
-export const COMMANDS : Command[] = [
-    {
-        name: "new",
-        description: "Start a new Conversation",
-        value: "/new",
-        action: (ctx) => {
-            ctx.toast.show({
-                variant: "success",
-                message: "Starting a new conversation..."
-            });
-        },
-    },
-    {
-        name: "login",
-        description: "login to the agentic coder",
-        value: "/login",
-        action: (ctx) => {
-            ctx.toast.show({
-                variant: "info",
-                message: "Opening login screen..."
-            });
-        },
-    },
-    {
-        name: "logout",
-        description: "logout from the agentic coder",
-        value: "/logout",
-        action: (ctx) => {
-            ctx.toast.show({
-                variant: "info",
-                message: "Logging out..."
-            });
-        },
-    },
-    {
-        name: "usage",
-        description: "check the usage of models and status",
-        value: "/usage",
-        action: (ctx) => {
-            ctx.toast.show({
-                variant: "info",
-                message: "Loading usage statistics..."
-            });
-        },
-    },
-    {
-        name: "models",
-        description: "select the models",
-        value: "/models",
-        action: (ctx) => {
-            ctx.toast.show({
-                variant: "success",
-                message: "Opening model selection..."
-            });
-        },
-    },
-    {
-        name: "agents",
-        description: "select the agents",
-        value: "/agents",
-        action: (ctx) => {
-            ctx.dialog.open({
-                title: "Select Mode",
-                children: <text>Agent Selection coming soon...</text>
-            });
-        },
-    },
-    {
-        name: "themes",
-        description: "change the theme",
-        value: "/themes",
-        action: (ctx) => {
-            ctx.toast.show({
-                variant: "info",
-                message: "Opening theme settings..."
-            });
-        },
-    },
-    {
-        name: "sessions",
-        description: "continue your previous sessions",
-        value: "/sessions",
-        action: (ctx) => {
-            ctx.toast.show({
-                variant: "success",
-                message: "Loading previous sessions..."
-            });
-        },
-    },
-    {
-        name: "upgrade",
-        description: "buy more credits",
-        value: "/upgrade",
-        action: (ctx) => {
-            ctx.toast.show({
-                variant: "info",
-                message: "Opening upgrade plans..."
-            });
-        },
-    },
-    {
-        name : "exit",
-        description : "Quit the Application",
-        value : "/exit",
-        action: (ctx) =>{
-            ctx.exit();
-        }
-    },
+import { performLogin } from "../../lib/oauth";
+import { clearAuth } from "../../lib/auth";
 
-]
+import { openBillingPortal, openUpgradeCheckout } from "../../lib/upgrade";
+
+export const COMMANDS: Command[] = [
+  {
+    name: "new",
+    description: "Start a new conversation",
+    value: "/new",
+    action: (ctx) => {
+      ctx.navigate("/");
+    },
+  },
+  {
+    name: "agents",
+    description: "Switch agents",
+    value: "/agents",
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "Select Agent",
+        children: <AgentsDialogContent currentMode={ctx.mode} onSelectMode={ctx.setMode} />,
+      })
+    },
+  },
+  {
+    name: "models",
+    description: "Select AI model for generation",
+    value: "/models",
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "Select Model",
+        children: (
+          <ModelsDialogContent
+            models={SUPPORTED_CHAT_MODELS.map((model) => model.id)}
+            onSelectModel={ctx.setModel}
+          />
+        ),
+      })
+    },
+  },
+  {
+    name: "sessions",
+    description: "Browse past sessions",
+    value: "/sessions",
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "Sessions",
+        children: <SessionsDialogContent />,
+      })
+    },
+  },
+  {
+    name: "theme",
+    description: "Change color theme",
+    value: "/theme",
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "Select Theme",
+        children: <ThemeDialogContent />,
+      })
+    },
+  },
+  {
+    name: "login",
+    description: "Sign in with your browser",
+    value: "/login",
+    action: async (ctx) => {
+      ctx.toast.show({ message: "Opening browser to sign in..." });
+
+      try {
+        await performLogin();
+        ctx.toast.show({ variant: "success", message: "Signed in" });
+      } catch (error) {
+        const message = error instanceof Error 
+          ? error.message 
+          : "Sign in failed or timed out";
+
+        ctx.toast.show({ variant: "error", message });
+      }
+    },
+  },
+  {
+    name: "logout",
+    description: "Sign out of your account",
+    value: "/logout",
+    action: (ctx) => {
+      clearAuth();
+      ctx.toast.show({ variant: "success", message: "Signed out" });
+    },
+  },
+  {
+    name: "upgrade",
+    description: "Buy more credits",
+    value: "/upgrade",
+    action: async (ctx) => {
+      ctx.toast.show({ message: "Opening credits checkout..." });
+
+      try {
+        await openUpgradeCheckout();
+        ctx.toast.show({
+          variant: "success",
+          message: "Checkout opened in browser",
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to open checkout";
+        ctx.toast.show({ variant: "error", message });
+      }
+    },
+  },
+  {
+    name: "usage",
+    description: "Open billing portal in your browser",
+    value: "/usage",
+    action: async (ctx) => {
+      ctx.toast.show({ message: "Opening billing portal..." });
+
+      try {
+        await openBillingPortal();
+        ctx.toast.show({
+          variant: "success",
+          message: "Billing portal opened in browser",
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to open billing portal";
+        ctx.toast.show({ variant: "error", message });
+      }
+    },
+  },
+  {
+    name: "exit",
+    description: "Quit the application",
+    value: "/exit",
+    action: (ctx) => {
+      ctx.exit();
+    },
+  },
+];
