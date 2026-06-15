@@ -104,6 +104,19 @@ function sendRequest(conn: McpConnection, method: string, params?: Record<string
       ...(params ? { params } : {}),
     };
 
+    // Per-request timeout (30s)
+    const timer = setTimeout(() => {
+      conn.pendingRequests.delete(id);
+      reject(new Error(`MCP request timed out after 30s: ${method}`));
+    }, 30_000);
+
+    const origResolve = resolve;
+    const origReject = reject;
+    conn.pendingRequests.set(id, {
+      resolve: (val) => { clearTimeout(timer); origResolve(val); },
+      reject: (err) => { clearTimeout(timer); origReject(err); },
+    });
+
     const message = JSON.stringify(request) + "\n";
     conn.process.stdin?.write(message);
   });
@@ -372,4 +385,19 @@ export const executeMcpTool = callMcpTool;
  */
 export function isMcpTool(toolName: string): boolean {
   return toolName.startsWith("mcp_");
+}
+
+/**
+ * Graceful shutdown — kill all MCP server processes.
+ * Called on CLI exit to prevent orphaned processes.
+ */
+export function shutdownMcp(): void {
+  for (const [name, conn] of connections) {
+    try {
+      conn.process.kill();
+    } catch {
+      // Process already dead
+    }
+  }
+  connections.clear();
 }

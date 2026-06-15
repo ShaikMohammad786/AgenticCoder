@@ -5,6 +5,23 @@ import { RootLayout } from "./layouts/root-layout";
 import { Home } from "./screens/home";
 import { NewSession } from "./screens/new-session";
 import { Session } from "./screens/session";
+import { shutdownMcp } from "./lib/mcp-client";
+
+// ── Process cleanup ─────────────────────────────────────────────
+// Kill MCP server subprocesses on exit to prevent orphans
+
+function cleanup() {
+  try { shutdownMcp(); } catch {}
+}
+
+process.on("exit", cleanup);
+process.on("SIGINT", () => { cleanup(); process.exit(0); });
+process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+process.on("uncaughtException", (err) => {
+  console.error("Fatal error:", err.message);
+  cleanup();
+  process.exit(1);
+});
 
 // React Router's default error boundary renders <h2>, <p> etc. which @opentui doesn't support
 function ErrorFallback() {

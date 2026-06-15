@@ -1,10 +1,27 @@
 import { TextAttributes } from "@opentui/core";
-import type { ReactNode } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { InputBar } from "./Input-bar";
 import { Spinner } from "./spinner";
 import { usePromptConfig } from "../providers/prompt-config";
 import { Mode } from "@agenticcoder/shared";
 import { useTheme } from "../providers/theme";
+
+function StreamingTimer() {
+  const [elapsed, setElapsed] = useState(0);
+  const { colors } = useTheme();
+
+  useEffect(() => {
+    setElapsed(0);
+    const interval = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+      {elapsed < 2 ? "Thinking..." : `Thinking... ${elapsed}s`}
+    </text>
+  );
+}
 
 type Props = {
   children?: ReactNode;
@@ -53,6 +70,7 @@ export function SessionShell({
           {loading ? (
             <>
               <Spinner mode={mode} />
+              <StreamingTimer />
               {interruptible ? <text>esc to interrupt</text> : null}
             </>
           ) : null}

@@ -82,6 +82,7 @@ export function BotMessage({
         <box key={group.key} width="100%" paddingTop={i === 0 ? 0 : 1}>
           {group.parts.map((part, j) => {
             if (part.type === "reasoning") {
+              if (!part.text || !part.text.trim()) return null;
               return (
                 <box
                   key={`reasoning-${j}`}

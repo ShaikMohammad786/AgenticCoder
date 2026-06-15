@@ -133,8 +133,14 @@ function formatContextForPrompt(ctx: ProjectContext): string {
   }
 
   return parts.length > 0
-    ? "# Project Context\n\n" + parts.join("\n\n---\n\n")
+    ? truncateContext("# Project Context\n\n" + parts.join("\n\n---\n\n"))
     : "";
+}
+
+const MAX_CONTEXT_SIZE = 50_000; // 50KB limit
+function truncateContext(text: string): string {
+  if (text.length <= MAX_CONTEXT_SIZE) return text;
+  return text.slice(0, MAX_CONTEXT_SIZE) + "\n\n... (project context truncated at 50KB)";
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────

@@ -8,7 +8,8 @@ const MAX_FILE_SIZE = 10_000;
 const MAX_RESULTS = 200;
 const MAX_MATCHES = 50;
 const MAX_OUTPUT = 20_000;
-const DEFAULT_TIMEOUT = 30_000;
+const MAX_BASH_OUTPUT = 100_000; // 100KB cap to prevent memory issues
+const DEFAULT_TIMEOUT = 60_000; // 60s default bash timeout
 const IS_WINDOWS = process.platform === "win32";
 
 const PLAN_TOOLS = [
@@ -347,11 +348,13 @@ export async function executeLocalTool(
         stderr: "pipe",
         env: { ...process.env, TERM: "dumb" },
       });
-      const timer = setTimeout(() => proc.kill(), timeout);
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; proc.kill(); }, timeout);
 
       // Stream stdout chunks via callback if provided
       const stdoutChunks: string[] = [];
       const stderrChunks: string[] = [];
+      let totalOutputSize = 0;
 
       if (callbacks?.onBashOutput && proc.stdout) {
         const reader = proc.stdout.getReader();
@@ -361,6 +364,12 @@ export async function executeLocalTool(
             const { done, value } = await reader.read();
             if (done) break;
             const text = decoder.decode(value);
+            totalOutputSize += text.length;
+            if (totalOutputSize > MAX_BASH_OUTPUT) {
+              proc.kill();
+              stdoutChunks.push("\n... (output exceeded 100KB limit, process killed)");
+              break;
+            }
             stdoutChunks.push(text);
             callbacks.onBashOutput(text);
           }
@@ -368,7 +377,12 @@ export async function executeLocalTool(
           // Stream ended
         }
       } else {
-        stdoutChunks.push(await new Response(proc.stdout).text());
+        const text = await new Response(proc.stdout).text();
+        if (text.length > MAX_BASH_OUTPUT) {
+          stdoutChunks.push(text.slice(0, MAX_BASH_OUTPUT) + "\n... (output exceeded 100KB limit)");
+        } else {
+          stdoutChunks.push(text);
+        }
       }
 
       stderrChunks.push(await new Response(proc.stderr).text());
@@ -381,6 +395,7 @@ export async function executeLocalTool(
         stdout: truncate(stdout, MAX_OUTPUT),
         stderr: truncate(stderr, MAX_OUTPUT),
         exitCode,
+        ...(timedOut ? { timedOut: true, message: `Command killed after ${timeout / 1000}s timeout` } : {}),
       };
     }
 
@@ -599,7 +614,12 @@ export async function executeLocalTool(
     default:
       // Route MCP tools to the MCP client
       if (isMcpTool(toolName)) {
-        return executeMcpTool(toolName, input as Record<string, unknown>);
+        try {
+          return await executeMcpTool(toolName, input as Record<string, unknown>);
+        } catch (err) {
+          const serverName = toolName.replace(/^mcp_/, "").split("_")[0];
+          throw new Error(`MCP tool failed [${serverName}]: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
       throw new Error(`Unknown tool: ${toolName}`);
   }

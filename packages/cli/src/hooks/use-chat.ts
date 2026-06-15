@@ -61,6 +61,8 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
       projectContextLoadedRef.current = true;
       buildProjectContext().then((ctx) => {
         projectContextRef.current = ctx;
+      }).catch((err) => {
+        console.error("[context] Failed to load project context:", err instanceof Error ? err.message : String(err));
       });
     }
     // Initialize MCP lazily if config exists (with timeout so it never blocks chat)
@@ -71,7 +73,9 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
         new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000)),
       ]).then(() => {
         mcpToolsRef.current = getAllMcpTools();
-      }).catch(() => {});
+      }).catch((err) => {
+        console.error("[mcp] Failed to initialize MCP servers:", err instanceof Error ? err.message : String(err));
+      });
     }
   }, []);
 
@@ -171,7 +175,14 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     isBashStreaming,
     submit: async (params: { userText: string; mode: ModeType; model: SupportedChatModelId }) => {
       // Extract image mentions (@file.png) and convert to multimodal parts
-      const { text, images } = await extractImageMentions(params.userText);
+      const { text, images, warnings } = await extractImageMentions(params.userText);
+
+      // Log image attachment warnings
+      if (warnings.length > 0) {
+        for (const w of warnings) {
+          console.error(`[image] ⚠ ${w}`);
+        }
+      }
 
       if (images.length > 0) {
         return chat.sendMessage({

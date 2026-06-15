@@ -70,6 +70,30 @@ function hasPendingToolCalls(message: agenticcoderUIMessage) {
   });
 };
 
+// ── Simple in-memory rate limiter ────────────────────────────────
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX = 10; // 10 requests per minute per user
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(userId: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(userId);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(userId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  entry.count++;
+  return entry.count <= RATE_LIMIT_MAX;
+}
+
+// Clean up stale rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateLimitMap) {
+    if (now > entry.resetAt) rateLimitMap.delete(key);
+  }
+}, 300_000);
+
 const app = new Hono<AuthenticatedEnv>()
   .post(
     "/",
@@ -78,6 +102,12 @@ const app = new Hono<AuthenticatedEnv>()
     async (c) => {
       try {
         const userId = c.get("userId");
+
+        // Rate limiting
+        if (!checkRateLimit(userId)) {
+          return c.json({ error: "Too many requests. Please slow down." }, 429);
+        }
+
         const { id, messages, mode, model, projectContext, mcpTools } = c.req.valid("json");
 
         const session = await db.session.findUnique({
@@ -91,11 +121,11 @@ const app = new Hono<AuthenticatedEnv>()
         const startTime = Date.now();
         const builtInTools = getToolContracts(mode);
 
-        // Merge MCP tools with built-in tools
-        const tools: Record<string, any> = { ...builtInTools };
+        // Merge MCP tools with built-in tools for the AI
+        const allTools: Record<string, any> = { ...builtInTools };
         if (mcpTools && mcpTools.length > 0) {
           for (const mcpTool of mcpTools) {
-            tools[mcpTool.name] = {
+            allTools[mcpTool.name] = {
               description: mcpTool.description,
               parameters: mcpTool.inputSchema,
             };
@@ -138,11 +168,12 @@ const app = new Hono<AuthenticatedEnv>()
           trimmedMessages = first ? [first, ...latest] : latest;
         }
 
+        // Use builtInTools for validation (requires proper types)
         const nextMessages = await validateUIMessages<agenticcoderUIMessage>({
           messages: trimmedMessages,
-          tools,
+          tools: builtInTools,
         });
-        const modelMessages = await convertToModelMessages(nextMessages, { tools });
+        const modelMessages = await convertToModelMessages(nextMessages, { tools: builtInTools });
         let completedUsage: LanguageModelUsage | null = null;
 
         console.log(`[chat] session=${id} model=${model} mode=${mode} msgs=${validMessages.length}${validMessages.length > MAX_CONTEXT_MESSAGES ? ` (trimmed to ${trimmedMessages.length})` : ''}`);
@@ -155,7 +186,7 @@ const app = new Hono<AuthenticatedEnv>()
           model: resolvedModel.model,
           system: buildSystemPrompt({ mode }) + (projectContext ? "\n\n" + projectContext : ""),
           messages: modelMessages,
-          tools,
+          tools: allTools,
           maxSteps: 25,
           maxTokens: 16384,
           temperature: 0,
@@ -206,12 +237,27 @@ const app = new Hono<AuthenticatedEnv>()
 
             if (hasPendingToolCalls(event.responseMessage)) return;
 
-            await db.session.update({
-              where: { id, userId },
-              data: {
-                messages: event.messages as unknown as Prisma.InputJsonValue,
-              },
-            });
+            // Save session with retry for transient DB errors
+            try {
+              await db.session.update({
+                where: { id, userId },
+                data: {
+                  messages: event.messages as unknown as Prisma.InputJsonValue,
+                },
+              });
+            } catch (saveError) {
+              console.error("Session save failed, retrying once:", saveError);
+              try {
+                await db.session.update({
+                  where: { id, userId },
+                  data: {
+                    messages: event.messages as unknown as Prisma.InputJsonValue,
+                  },
+                });
+              } catch (retryError) {
+                console.error("Session save retry also failed:", retryError);
+              }
+            }
 
             if (!completedUsage) return;
 
