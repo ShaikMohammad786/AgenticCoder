@@ -6,7 +6,6 @@ import { Home } from "./screens/home";
 import { NewSession } from "./screens/new-session";
 import { Session } from "./screens/session";
 
-// Custom error element that uses @opentui components instead of HTML
 // React Router's default error boundary renders <h2>, <p> etc. which @opentui doesn't support
 function ErrorFallback() {
   const error = useRouteError();

@@ -22,4 +22,4 @@ export function RootLayout() {
       </ToastProvider>
     </ThemeProvider>
   );
-};
+};

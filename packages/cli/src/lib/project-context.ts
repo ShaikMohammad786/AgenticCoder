@@ -1,142 +1,143 @@
 /**
- * Smart Context Injection — reads project context files and injects them
- * into the AI system prompt for better, project-aware responses.
- * 
- * Reads from:
- * - .agenticcoder/AGENT.md (project memory file)
- * - .agenticcoder/context/*.md (additional context files)
- * - package.json (project metadata)
- * - tsconfig.json (TypeScript config)
+ * Smart project context injection.
+ *
+ * Gathers project metadata from:
+ *   1. .agenticcoder/AGENT.md — project memory / instructions
+ *   2. .agenticcoder/context/*.md — additional context files
+ *   3. package.json — detects framework, dependencies, scripts
+ *
+ * The output string is injected into the AI system prompt so the model
+ * understands the project structure without the user repeating themselves.
  */
 
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-interface ProjectContext {
-  projectName: string;
-  projectDescription: string;
-  agentMemory: string | null;
+// ── Types ──────────────────────────────────────────────────────────────────
+
+type ProjectContext = {
+  agentMd: string | null;
   contextFiles: { name: string; content: string }[];
-  techStack: string[];
-  dependencies: string[];
+  packageJson: {
+    name?: string;
+    description?: string;
+    scripts?: Record<string, string>;
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  } | null;
+  detectedFramework: string | null;
+};
+
+// ── Framework detection ────────────────────────────────────────────────────
+
+const FRAMEWORK_SIGNATURES: [string, string][] = [
+  ["next", "Next.js"],
+  ["nuxt", "Nuxt"],
+  ["@angular/core", "Angular"],
+  ["vue", "Vue"],
+  ["svelte", "Svelte"],
+  ["react", "React"],
+  ["express", "Express"],
+  ["fastify", "Fastify"],
+  ["hono", "Hono"],
+  ["@nestjs/core", "NestJS"],
+  ["django", "Django"],
+  ["flask", "Flask"],
+  ["prisma", "Prisma"],
+  ["drizzle-orm", "Drizzle"],
+];
+
+function detectFramework(deps: Record<string, string>): string | null {
+  for (const [pkg, name] of FRAMEWORK_SIGNATURES) {
+    if (deps[pkg]) return name;
+  }
+  return null;
 }
 
-/**
- * Gather all project context from the current working directory.
- */
-export function gatherProjectContext(cwd?: string): ProjectContext {
+// ── Gather context ─────────────────────────────────────────────────────────
+
+function gatherProjectContext(cwd?: string): ProjectContext {
   const root = cwd ?? process.cwd();
+  const agenticDir = join(root, ".agenticcoder");
 
-  const context: ProjectContext = {
-    projectName: "",
-    projectDescription: "",
-    agentMemory: null,
-    contextFiles: [],
-    techStack: [],
-    dependencies: [],
-  };
-
-  // Read package.json
-  try {
-    const pkgPath = join(root, "package.json");
-    if (existsSync(pkgPath)) {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-      context.projectName = pkg.name ?? "";
-      context.projectDescription = pkg.description ?? "";
-      context.dependencies = [
-        ...Object.keys(pkg.dependencies ?? {}),
-        ...Object.keys(pkg.devDependencies ?? {}),
-      ];
-    }
-  } catch {
-    // ignore
+  // 1. AGENT.md
+  let agentMd: string | null = null;
+  const agentMdPath = join(agenticDir, "AGENT.md");
+  if (existsSync(agentMdPath)) {
+    try {
+      agentMd = readFileSync(agentMdPath, "utf8").trim();
+    } catch {}
   }
 
-  // Detect tech stack from dependencies
-  const depSet = new Set(context.dependencies);
-  if (depSet.has("react")) context.techStack.push("React");
-  if (depSet.has("next")) context.techStack.push("Next.js");
-  if (depSet.has("vue")) context.techStack.push("Vue");
-  if (depSet.has("express")) context.techStack.push("Express");
-  if (depSet.has("hono")) context.techStack.push("Hono");
-  if (depSet.has("prisma") || depSet.has("@prisma/client"))
-    context.techStack.push("Prisma");
-  if (depSet.has("drizzle-orm")) context.techStack.push("Drizzle");
-  if (depSet.has("mongoose")) context.techStack.push("MongoDB/Mongoose");
-  if (depSet.has("tailwindcss")) context.techStack.push("Tailwind CSS");
-  if (depSet.has("typescript")) context.techStack.push("TypeScript");
-
-  // Read .agenticcoder/AGENT.md
-  try {
-    const agentPath = join(root, ".agenticcoder", "AGENT.md");
-    if (existsSync(agentPath)) {
-      context.agentMemory = readFileSync(agentPath, "utf8");
-    }
-  } catch {
-    // ignore
-  }
-
-  // Read .agenticcoder/context/*.md
-  try {
-    const contextDir = join(root, ".agenticcoder", "context");
-    if (existsSync(contextDir)) {
-      const files = readdirSync(contextDir).filter((f) =>
-        f.endsWith(".md")
-      );
+  // 2. Context files
+  const contextFiles: { name: string; content: string }[] = [];
+  const contextDir = join(agenticDir, "context");
+  if (existsSync(contextDir)) {
+    try {
+      const files = readdirSync(contextDir).filter((f) => f.endsWith(".md"));
       for (const file of files) {
         try {
-          const content = readFileSync(join(contextDir, file), "utf8");
-          context.contextFiles.push({ name: file, content });
-        } catch {
-          // skip unreadable files
-        }
+          const content = readFileSync(join(contextDir, file), "utf8").trim();
+          if (content) {
+            contextFiles.push({ name: file, content });
+          }
+        } catch {}
       }
-    }
-  } catch {
-    // ignore
+    } catch {}
   }
 
-  // Also check for tsconfig to add TypeScript if not detected from deps
-  try {
-    if (
-      !context.techStack.includes("TypeScript") &&
-      existsSync(join(root, "tsconfig.json"))
-    ) {
-      context.techStack.push("TypeScript");
-    }
-  } catch {
-    // ignore
+  // 3. package.json
+  let packageJson: ProjectContext["packageJson"] = null;
+  const pkgPath = join(root, "package.json");
+  if (existsSync(pkgPath)) {
+    try {
+      packageJson = JSON.parse(readFileSync(pkgPath, "utf8"));
+    } catch {}
   }
 
-  return context;
+  // 4. Framework detection
+  const allDeps = {
+    ...(packageJson?.dependencies ?? {}),
+    ...(packageJson?.devDependencies ?? {}),
+  };
+  const detectedFramework = detectFramework(allDeps);
+
+  return { agentMd, contextFiles, packageJson, detectedFramework };
 }
 
-/**
- * Format the project context into a system prompt injection string.
- */
-export function formatContextForPrompt(context: ProjectContext): string {
+// ── Format for prompt ──────────────────────────────────────────────────────
+
+function formatContextForPrompt(ctx: ProjectContext): string {
   const parts: string[] = [];
 
-  if (context.projectName) {
-    parts.push(`Project: ${context.projectName}`);
-  }
-  if (context.projectDescription) {
-    parts.push(`Description: ${context.projectDescription}`);
-  }
-  if (context.techStack.length > 0) {
-    parts.push(`Tech Stack: ${context.techStack.join(", ")}`);
-  }
-  if (context.agentMemory) {
-    parts.push(`\n--- Project Memory ---\n${context.agentMemory}`);
-  }
-  for (const file of context.contextFiles) {
-    parts.push(`\n--- ${file.name} ---\n${file.content}`);
+  if (ctx.agentMd) {
+    parts.push("## Project Instructions (AGENT.md)\n\n" + ctx.agentMd);
   }
 
-  if (parts.length === 0) return "";
+  for (const file of ctx.contextFiles) {
+    parts.push(`## Context: ${file.name}\n\n${file.content}`);
+  }
 
-  return `<project_context>\n${parts.join("\n")}\n</project_context>`;
+  if (ctx.packageJson) {
+    const info: string[] = [];
+    if (ctx.packageJson.name) info.push(`- **Project**: ${ctx.packageJson.name}`);
+    if (ctx.packageJson.description) info.push(`- **Description**: ${ctx.packageJson.description}`);
+    if (ctx.detectedFramework) info.push(`- **Framework**: ${ctx.detectedFramework}`);
+    if (ctx.packageJson.scripts) {
+      const scripts = Object.keys(ctx.packageJson.scripts).join(", ");
+      info.push(`- **Scripts**: ${scripts}`);
+    }
+    if (info.length > 0) {
+      parts.push("## Project Info\n\n" + info.join("\n"));
+    }
+  }
+
+  return parts.length > 0
+    ? "# Project Context\n\n" + parts.join("\n\n---\n\n")
+    : "";
 }
+
+// ── Public API ─────────────────────────────────────────────────────────────
 
 /**
  * Get the full context injection string for the current project.
