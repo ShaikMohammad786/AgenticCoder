@@ -18,6 +18,18 @@
 10. [Authentication Flow](#10-authentication-flow)
 11. [Billing Flow](#11-billing-flow)
 12. [Environment Variables](#12-environment-variables)
+13. [Advanced: Token-Aware Context Management](#13-advanced-token-aware-context-management)
+14. [Advanced: Conversation Memory (RAG)](#14-advanced-conversation-memory-rag)
+15. [Advanced: Auto-Lint Self-Healing Pipeline](#15-advanced-auto-lint-self-healing-pipeline)
+16. [Advanced: Streaming Progress Tracker](#16-advanced-streaming-progress-tracker)
+17. [Advanced: Ollama Local Model Support](#17-advanced-ollama-local-model-support)
+18. [Advanced: Plugin System, Skills, File Watcher, Rich Diff & Image Understanding](#18-advanced-plugin-system-skills-file-watcher-rich-diff--image-understanding)
+19. [MCP (Model Context Protocol) Support](#19-mcp-model-context-protocol-support)
+20. [Checkpoint / Undo System](#20-checkpoint--undo-system)
+21. [Project Context Injection](#21-project-context-injection)
+22. [Bash Streaming](#22-bash-streaming)
+23. [Preference Persistence](#23-preference-persistence)
+24. [Image Input Deep Dive](#24-image-input-deep-dive)
 
 ---
 
@@ -1455,9 +1467,693 @@ After AI response:
 
 AgenticCoder is a **4-package monorepo** where:
 
-- **`shared`** defines the contract (tool schemas, model definitions, types)
+- **`shared`** defines the contract (tool schemas, model definitions, token counter, types)
 - **`database`** stores sessions and messages in Neon PostgreSQL via Prisma
-- **`server`** orchestrates AI conversations, authentication, and billing (Hono + AI SDK + Clerk + Polar)
-- **`cli`** renders the terminal UI and executes all 16 tools locally on the user's machine (React + @opentui)
+- **`server`** orchestrates AI conversations with token-aware context management, authentication, and billing (Hono + AI SDK + Clerk + Polar)
+- **`cli`** renders the terminal UI and executes all 16+ tools locally with auto-lint self-healing, conversation memory, streaming metrics, plugins, skills, file watching, and rich diffs (React + @opentui)
 
-The AI never touches your files directly. The server acts as a relay between you and the AI model. Tool calls flow: **Server → CLI → Your Files → CLI → Server → AI → repeat (up to 25 steps)**.
+The AI never touches your files directly. The server acts as a relay between you and the AI model. Tool calls flow: **Server → CLI → Your Files → Auto-Lint → CLI → Server → AI → repeat (up to 25 steps)**.
+
+---
+
+## 13. Advanced: Token-Aware Context Management
+
+### The Problem
+
+LLMs have fixed context windows (8K–128K tokens). Long conversations exceed this limit, causing truncation or API errors. A naive approach (keep latest N messages) loses critical context like error messages and original user intent.
+
+### The Solution
+
+AgenticCoder uses a **priority-based context manager** that intelligently allocates token budget and selectively keeps the most important messages.
+
+### File: `packages/shared/src/token-counter.ts`
+
+**Token estimation** — fast, dependency-free, O(1):
+
+```typescript
+const CHARS_PER_TOKEN = 3.5; // Conservative estimate for code
+
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+```
+
+**Why not tiktoken?** Tiktoken requires a 4MB WASM binary and is 100x slower. For budget allocation (not billing), character-based estimation is accurate enough (within ~15% of exact count) and has zero dependencies.
+
+**Token budget allocation:**
+
+```
+getTokenBudget(32768) → {
+  systemPromptBudget:    4915  (15%) — system instructions
+  projectContextBudget:  3276  (10%) — AGENT.md + project context
+  historyBudget:        18022  (55%) — conversation messages
+  reserveTokens:         6553  (20%) — AI response generation
+}
+```
+
+### File: `packages/server/src/lib/context-manager.ts`
+
+**Priority scoring** — each message gets a priority score:
+
+| Message Type | Score | Rationale |
+|-------------|-------|----------|
+| Error tool results | +50 | Prevent repeating mistakes |
+| User messages | +30 | Contains instructions |
+| Write tool results (writeFile, editFile) | +25 | Shows what was changed |
+| Long text content | +1-20 | More context = more useful |
+| Assistant messages | +10 | Base value |
+
+**Trimming strategy:**
+1. Always keep the first message (original context)
+2. Always keep the last 6 messages (recency)
+3. Score all middle messages by priority
+4. Fill remaining budget with highest-priority middle messages
+5. Generate a summary of dropped messages and inject it as context
+
+**Integration in `chat.ts`:**
+
+```typescript
+const contextResult = manageContext(
+  validMessages,
+  systemTokens,      // tokens used by system prompt
+  projectTokens,     // tokens used by project context
+  32768,             // model context size
+);
+// contextResult.messages     → trimmed messages
+// contextResult.trimmedCount → how many were dropped
+// contextResult.summary      → summary of dropped messages
+// contextResult.totalTokens  → total tokens used
+```
+
+### Design Decisions for Interview Discussion
+
+1. **Why char-based estimation?** Speed (O(1) vs O(n) for BPE), zero deps, sufficient for budget allocation
+2. **Why not just keep latest N?** Loses critical error context and original user intent
+3. **Why 55% for history?** Leaves enough room for system prompt, project context, and AI response
+4. **Why summarize dropped messages?** The AI needs to know what happened previously, even if the full messages are trimmed
+
+---
+
+## 14. Advanced: Conversation Memory (RAG)
+
+### The Problem
+
+Each chat session is isolated. The AI doesn't remember that you prefer tabs over spaces, that your project uses Prisma, or that you corrected it about a specific pattern last week.
+
+### The Solution
+
+A lightweight **RAG (Retrieval-Augmented Generation)** system that extracts learnings from conversations and retrieves relevant ones for new sessions.
+
+### File: `packages/cli/src/lib/memory.ts`
+
+**Storage:** `~/.agenticcoder/memory.jsonl` — append-only log (no database needed)
+
+**Memory types:**
+
+| Type | Trigger Pattern | Example |
+|------|----------------|--------|
+| `preference` | "I prefer...", "always use...", "don't use..." | "User prefers const over let" |
+| `correction` | "no, that's wrong", "not like that" | "Don't use var in TypeScript" |
+| `project-info` | Detected from AI responses | "Project uses Prisma + PostgreSQL" |
+| `fact` | Explicit saves | "API endpoint is /v2/users" |
+| `pattern` | Repeated behaviors | "User always runs tests after edits" |
+
+**Retrieval: BM25 keyword scoring**
+
+```typescript
+// For each memory, calculate relevance:
+score = Σ(IDF(term) for term in query ∩ memory)
+      × 1.5 if same project
+      + 2.0 per keyword match
+      + recency_bias (decays over 30 days)
+      + 3.0 if correction type (critical to remember)
+```
+
+**Lifecycle:**
+
+```
+Session starts
+  → retrieveRelevantMemories(query, projectDir)
+  → BM25 score all memories against current context
+  → Return top 8 by score (threshold > 0.5)
+  → Format as system prompt section:
+     "## Remembered Context
+      - 🎯 Preference: User prefers tabs over spaces
+      - ⚠️ Correction: Don't use var, use const
+      - 📦 Project: Project uses Prisma + PostgreSQL"
+
+Session ends
+  → extractLearnings(messages)
+  → Detect preference/correction patterns in user messages
+  → saveMemories(learnings) → append to memory.jsonl
+```
+
+**Configuration:**
+- Max 500 memories stored
+- Max 8 injected per session
+- 90-day TTL (old memories auto-expire)
+- Deduplication by content prefix
+
+### Design Decisions for Interview Discussion
+
+1. **Why not a vector DB?** For a CLI tool with <500 memories, BM25 keyword matching is sufficient and requires zero infrastructure. A vector DB is overkill.
+2. **Why append-only JSONL?** Simple, fast, no migrations, easy to inspect and debug
+3. **Why 8 max memories?** Each memory ≈ 20-50 tokens. 8 memories ≈ 200-400 tokens — small enough to not crowd out real context
+4. **Why BM25 over TF-IDF?** BM25 handles term frequency saturation better — a memory mentioning "TypeScript" 5 times shouldn't score 5× higher than one mentioning it once
+
+---
+
+## 15. Advanced: Auto-Lint Self-Healing Pipeline
+
+### The Problem
+
+AI models generate code with syntax errors, type mismatches, and missing imports. Without feedback, the AI has no way to know its output was broken.
+
+### The Solution
+
+After every `writeFile`, `editFile`, and `searchReplace` tool call, automatically run the appropriate linter for the file type. If errors are found, include them in the tool response so the AI can self-correct on the next iteration.
+
+### File: `packages/cli/src/lib/auto-lint.ts`
+
+**Supported languages:**
+
+| Extension | Linter | Method | Timeout |
+|-----------|--------|--------|--------|
+| `.ts`, `.tsx` | `tsc --noEmit` | Finds nearest `tsconfig.json`, filters errors to edited file | 30s |
+| `.js`, `.jsx` | `node --check` | Syntax validation | 15s |
+| `.py` | `python -m py_compile` | Syntax validation | 15s |
+| `.json` | `JSON.parse()` | Inline validation | Instant |
+| `.css` | Bracket matching | Inline validation | Instant |
+
+**Self-healing flow:**
+
+```
+1. AI calls editFile({ path: "src/utils.ts", oldString: ..., newString: ... })
+2. local-tools.ts applies the edit
+3. autoLint("src/utils.ts", cwd) runs automatically
+4. tsc finds 2 errors in utils.ts
+5. Tool response includes:
+   {
+     success: true,
+     path: "src/utils.ts",
+     diff: "... colored diff ...",
+     lint: "❌ TypeScript lint: 2 error(s)\n  • error TS2322: Type 'string' is not assignable to type 'number'\n  • error TS2304: Cannot find name 'foo'\n\n💡 Fix the TypeScript errors in utils.ts, then try again."
+   }
+6. AI reads the lint field and makes a follow-up editFile to fix the errors
+7. Step 3-6 repeat until lint passes ✅
+```
+
+**TypeScript-specific intelligence:**
+- Searches up to 5 parent directories for `tsconfig.json`
+- If found, runs project-wide check but filters to only show errors in the edited file
+- If not found, falls back to single-file check with sensible defaults
+
+**Integration in `local-tools.ts`:**
+
+```typescript
+case "writeFile": {
+  // ... write the file ...
+  const lint = await autoLint(relPath, cwd).catch(() => null);
+  return {
+    success: true,
+    path: relPath,
+    bytesWritten: Buffer.byteLength(content, "utf-8"),
+    ...(lint && !lint.passed ? { lint: formatLintResult(lint) } : {}),
+  };
+}
+```
+
+### Design Decisions for Interview Discussion
+
+1. **Why not block on lint failure?** The edit still succeeded — we want to inform the AI, not prevent writes
+2. **Why filter tsc errors?** A project may have 50 pre-existing errors. We only show errors in the file the AI just touched
+3. **Why graceful fallback?** If `tsc` isn't installed, we silently skip rather than breaking the tool pipeline
+4. **Why inline JSON/CSS validation?** These are cheap to check without spawning processes
+
+---
+
+## 16. Advanced: Streaming Progress Tracker
+
+### The Problem
+
+During long AI responses, the user has no visibility into how fast the model is generating, how many tokens have been produced, or what the estimated cost is.
+
+### The Solution
+
+A real-time metrics tracker that measures streaming performance and displays it in the terminal status bar.
+
+### File: `packages/cli/src/lib/streaming-tracker.ts`
+
+**Metrics tracked:**
+
+| Metric | How It's Calculated |
+|--------|-------------------|
+| `tokensPerSecond` | Rolling 50-chunk window: `tokens_in_window / window_duration_ms × 1000` |
+| `elapsedMs` | `Date.now() - startTime` |
+| `tokensGenerated` | `totalChars / 3.5` (same char-based estimation) |
+| `estimatedCost` | `(inputTokens / 1M × inputPrice) + (outputTokens / 1M × outputPrice)` |
+| `firstTokenMs` | Time between `start()` and first `onChunk()` (TTFT) |
+
+**Status bar display:**
+
+```
+⚡ 142 tok/s  │  ⏱ 3.2s  │  📊 1.2K  │  💰 $0.0012
+```
+
+**Integration:**
+- `StreamingTracker` is a singleton (one per CLI process)
+- `start()` is called when user submits a message
+- `onChunk()` is called on each streaming text update
+- `stop()` is called when streaming completes
+- `getMetrics()` returns a snapshot for UI rendering
+- The status bar persists after streaming stops so the user can see final metrics
+
+---
+
+## 17. Advanced: Ollama Local Model Support
+
+### The Problem
+
+Cloud AI providers require API keys, internet, and may charge per token. Users want the option to run models locally.
+
+### The Solution
+
+Full Ollama integration as a first-class provider alongside OpenRouter.
+
+### File: `packages/cli/src/lib/ollama.ts`
+
+**Capabilities:**
+- Auto-detect Ollama availability (`http://localhost:11434/api/tags`)
+- List installed models with sizes
+- Pull new models with progress tracking
+- Format model sizes ("3.8 GB")
+
+### File: `packages/server/src/lib/models.ts`
+
+**Provider routing:**
+
+```typescript
+function resolveChatModel(modelId: string) {
+  if (isOllamaModel(modelId)) {
+    // Route to local Ollama — no API key needed
+    return {
+      model: ollama(modelId.replace("ollama:", "")),
+      isLocal: true  // ← Skip billing
+    };
+  }
+  // Route to OpenRouter
+  return { model: openrouter(modelId), isLocal: false };
+}
+```
+
+**Billing bypass:** In `chat.ts`, when `resolvedModel.isLocal` is true, credit checks and usage ingestion are skipped entirely.
+
+**Model ID format:** `ollama:codellama:7b` — the `ollama:` prefix triggers local routing.
+
+---
+
+## 18. Advanced: Plugin System, Skills, File Watcher, Rich Diff & Image Understanding
+
+### Plugin System
+
+**File:** `packages/cli/src/lib/plugins.ts`
+
+Plugins are custom tools stored in `.agenticcoder/plugins/<name>/`:
+
+```
+.agenticcoder/plugins/my-tool/
+├── plugin.json    ← { name, description, inputSchema, handler }
+└── handler.sh     ← Receives PLUGIN_INPUT env var (JSON)
+```
+
+**Execution flow:** Plugin tool calls are intercepted in `local-tools.ts` before falling through to MCP. The handler script is spawned as a subprocess with `PLUGIN_INPUT` set to the JSON-serialized input. Stdout is captured as the tool result.
+
+### Skills System
+
+**File:** `packages/cli/src/lib/skills.ts`
+
+Skills are reusable prompt templates with YAML frontmatter:
+
+```markdown
+---
+name: Code Review
+description: Review code for bugs, security, and performance
+mode: PLAN
+---
+Review the following code for...
+```
+
+**5 built-in skills:** Code Review, Add Tests, Refactor, Debug, Document
+
+**Activation:** `/skills` command → select a skill → its prompt is injected into the chat input.
+
+### File Watcher
+
+**File:** `packages/cli/src/lib/file-watcher.ts`
+
+Recursive `fs.watch()` that detects external file changes (not made by the AI) and shows toast notifications. Ignores `node_modules/`, `.git/`, and files recently written by AI tools (tracked via `markAiWritten()`).
+
+**Debouncing:** 500ms window — batches rapid file changes into a single notification: `"📁 3 files changed externally"`.
+
+### Rich Diff Viewer
+
+**File:** `packages/cli/src/lib/diff-renderer.ts`
+
+Pure TypeScript LCS-based diff engine that produces colorized output:
+
+```diff
+src/lib/utils.ts  +3 -1
+@@ -10 +10 @@
+  10 - const old = "value";
+  10 + const updated = "new value";
+  11 + const extra = true;
+```
+
+Integrated into `editFile` and `searchReplace` tool responses.
+
+### Image Understanding
+
+**File:** `packages/cli/src/lib/image-input.ts`
+
+- **`@file.png` mentions:** Extracted from user input, converted to base64 multimodal parts
+- **`captureScreenshot()`:** Platform-specific screenshot (Win: PowerShell, Mac: screencapture, Linux: gnome-screenshot)
+- **`captureClipboardImage()`:** Read image from clipboard
+- **Vision model detection:** `supportsVision` flag in model definitions, with image analysis instructions injected into system prompt when images are detected
+
+---
+
+## Complete New Files Reference
+
+| File | Package | Purpose |
+|------|---------|--------|
+| `token-counter.ts` | shared | Token estimation + budget allocation |
+| `context-manager.ts` | server | Priority-based context trimming |
+| `memory.ts` | cli | RAG conversation memory (BM25) |
+| `auto-lint.ts` | cli | Self-healing lint pipeline |
+| `streaming-tracker.ts` | cli | Real-time streaming metrics |
+| `ollama.ts` | cli | Ollama local model client |
+| `plugins.ts` | cli | Plugin loader + executor |
+| `skills.ts` | cli | Skills loader + built-in skills |
+| `file-watcher.ts` | cli | External file change detection |
+| `diff-renderer.ts` | cli | LCS-based rich diff engine |
+| `image-input.ts` | cli | Screenshot + clipboard image capture |
+| `ollama-dialog.tsx` | cli | Ollama model browser UI |
+| `plugins-dialog.tsx` | cli | Plugin viewer UI |
+| `skills-dialog.tsx` | cli | Skills browser UI |
+
+---
+
+## 19. MCP (Model Context Protocol) Support
+
+### File: `packages/cli/src/lib/mcp-client.ts` — The MCP protocol engine
+
+**Types defined:**
+```ts
+type McpServerConfig = {
+  command: string;      // e.g. "npx"
+  args: string[];       // e.g. ["-y", "@modelcontextprotocol/server-puppeteer"]
+  env?: Record<string, string>; // e.g. { GITHUB_TOKEN: "..." }
+};
+
+type McpConfig = {
+  mcpServers: Record<string, McpServerConfig>; // keyed by server name
+};
+
+type McpConnection = {
+  process: ChildProcess;          // spawned subprocess handle
+  tools: McpToolDefinition[];     // discovered tools from this server
+  connected: boolean;
+};
+
+type McpToolDefinition = {
+  name: string;        // prefixed: "mcp_servername_toolname"
+  description: string;
+  inputSchema: Record<string, unknown>; // JSON Schema for tool params
+};
+```
+
+**Key functions:**
+| Function | Signature | Purpose |
+|----------|-----------|---------|
+| `hasMcpConfig()` | `() → boolean` | Checks if `.agenticcoder/mcp.json` exists in cwd |
+| `loadMcpConfig()` | `() → McpConfig` | Reads + parses the config file |
+| `initializeMcp()` | `(cwd?) → Promise<{errors: string[]}>` | Spawns all servers, discovers tools via JSON-RPC `tools/list` |
+| `getAllMcpTools()` | `() → McpToolDefinition[]` | Returns flat list of all tools from all connected servers |
+| `getMcpStatus()` | `() → McpServerInfo[]` | Returns server name, connected status, tool count, tool names |
+| `callMcpTool()` | `(name, input) → Promise<unknown>` | Routes a tool call to correct server via JSON-RPC `tools/call` |
+| `executeMcpTool` | alias for `callMcpTool` | Used by `local-tools.ts` |
+| `isMcpTool()` | `(name) → boolean` | Returns true if name starts with `mcp_` |
+| `shutdownMcp()` | `() → void` | Kills all spawned server processes |
+
+**Flow: How MCP tools connect**
+```
+1. CLI starts → use-chat.ts useEffect fires
+2. hasMcpConfig() checks .agenticcoder/mcp.json exists
+3. initializeMcp() reads config, for each server:
+   a. Spawns process: Bun.spawn([command, ...args])
+   b. Sends JSON-RPC: {"method": "initialize", "params": {...}}
+   c. Waits for {"result": {"capabilities": ...}}
+   d. Sends JSON-RPC: {"method": "tools/list"}
+   e. Receives: {"result": {"tools": [{name, description, inputSchema}]}}
+   f. Prefixes each tool: "mcp_servername_toolname"
+   g. Stores in connections Map
+4. getAllMcpTools() collects tools from all connections
+5. Tools sent to server in chat request body as mcpTools[]
+```
+
+**Flow: How AI calls an MCP tool**
+```
+1. Server includes MCP tools in streamText({tools: {...builtIn, ...mcpTools}})
+2. AI decides to call mcp_puppeteer_screenshot
+3. Client receives tool call in onToolCall
+4. local-tools.ts checks isMcpTool("mcp_puppeteer_screenshot") → true
+5. Calls executeMcpTool("mcp_puppeteer_screenshot", {url: "..."})
+6. mcp-client.ts finds "puppeteer" connection
+7. Sends JSON-RPC: {"method": "tools/call", "params": {name: "screenshot", arguments: {url: "..."}}}
+8. Receives result, returns to AI
+```
+
+### File: `packages/cli/src/components/dialogs/mcp-dialog.tsx` — MCP Server UI
+
+**Built-in catalog (6 servers):**
+| Server | Package | Needs API Key |
+|--------|---------|---------------|
+| Filesystem | `@modelcontextprotocol/server-filesystem` | No |
+| GitHub | `@modelcontextprotocol/server-github` | Yes (GITHUB_TOKEN) |
+| Brave Search | `@modelcontextprotocol/server-brave-search` | Yes (BRAVE_API_KEY) |
+| PostgreSQL | `@modelcontextprotocol/server-postgres` | Yes (DATABASE_URL) |
+| Memory | `@modelcontextprotocol/server-memory` | No |
+| Puppeteer | `@modelcontextprotocol/server-puppeteer` | No |
+
+**Tool routing in `local-tools.ts`:**
+```ts
+// After all built-in tool handlers:
+if (isMcpTool(toolName)) {
+  return executeMcpTool(toolName, input as Record<string, unknown>);
+}
+```
+
+---
+
+## 20. Checkpoint / Undo System
+
+### File: `packages/cli/src/lib/checkpoint.ts`
+
+**Functions:**
+| Function | Signature | What it does |
+|----------|-----------|-------------|
+| `createCheckpoint()` | `() → Promise<{success, message}>` | Runs `git stash push -u -m "agenticcoder-checkpoint-{timestamp}"` |
+| `undoToLastCheckpoint()` | `() → Promise<{success, message}>` | Finds latest checkpoint stash, runs `git stash pop` |
+| `cleanupCheckpoints()` | `(keepCount=5) → Promise<void>` | Lists stashes, drops checkpoint stashes beyond keepCount |
+
+**Git stash naming convention:**
+```
+stash@{0}: agenticcoder-checkpoint-1718378400000
+stash@{1}: agenticcoder-checkpoint-1718378300000
+```
+
+**Automatic checkpoints:** Before any write operation (`writeFile`, `editFile`, `searchReplace`, `bash`), `local-tools.ts` calls `ensureCheckpoint()` to save the current state.
+
+**Commands:**
+- `/undo` → calls `undoToLastCheckpoint()`, shows toast with result
+- `/commit` → runs `git add -A && git commit -m "chore: agenticcoder changes"`
+
+---
+
+## 21. Project Context Injection
+
+### File: `packages/cli/src/lib/project-context.ts`
+
+**What it gathers:**
+1. `.agenticcoder/AGENT.md` — project memory/instructions
+2. `.agenticcoder/context/*.md` — additional context files
+3. `package.json` — detects framework, dependencies, scripts
+
+**Flow:**
+```
+1. use-chat.ts useEffect → buildProjectContext() → Promise<string>
+2. gatherProjectContext() reads files:
+   - AGENT.md content
+   - All context/*.md files
+   - package.json → detects React/Next/Express/etc.
+3. formatContextForPrompt() formats as markdown block
+4. Stored in projectContextRef.current
+5. Sent with every chat request as body.projectContext
+6. Server appends to system prompt: system + "\n\n" + projectContext
+```
+
+---
+
+## 22. Bash Streaming
+
+### How bash output streams in real-time across the UI
+
+**`use-chat.ts`** — State management:
+```ts
+const [bashOutput, setBashOutput] = useState("");       // accumulated output
+const [isBashStreaming, setIsBashStreaming] = useState(false); // streaming indicator
+
+const onBashOutput = useCallback((chunk: string) => {
+  setIsBashStreaming(true);
+  setBashOutput((prev) => {
+    const combined = prev + chunk;
+    const lines = combined.split("\n");
+    return lines.length > 100 ? lines.slice(-100).join("\n") : combined; // cap at 100 lines
+  });
+  // Auto-clear streaming after 500ms idle
+  bashTimeoutRef.current = setTimeout(() => setIsBashStreaming(false), 500);
+}, []);
+```
+
+**`session.tsx`** — Passes as props:
+```tsx
+<ChatMessage msg={msg} bashOutput={bashOutput} isBashStreaming={isBashStreaming} />
+```
+
+**`bot-message.tsx`** — Renders last 5 lines:
+```tsx
+{isBashStreaming && bashOutput && (
+  <box flexDirection="column">
+    <text fg="gray">{bashOutput.split("\n").slice(-5).join("\n")}</text>
+  </box>
+)}
+```
+
+---
+
+## 23. Preference Persistence
+
+### File: `packages/cli/src/providers/prompt-config/index.tsx`
+
+**Storage location:** `~/.agenticcoder/preferences.json`
+
+**Format:**
+```json
+{
+  "model": "google/gemini-2.5-flash",
+  "mode": "BUILD"
+}
+```
+
+**Merge-on-write pattern (prevents overwriting other preferences):**
+```ts
+function savePreferences(partial: Partial<Preferences>) {
+  const existing = loadPreferences(); // read current
+  const merged = { ...existing, ...partial }; // merge
+  writeFileSync(PREFS_PATH, JSON.stringify(merged, null, 2));
+}
+```
+
+Same pattern used by `packages/cli/src/providers/theme/index.tsx` for theme persistence.
+
+---
+
+## 24. Image Input Deep Dive
+
+### File: `packages/cli/src/lib/image-input.ts`
+
+**Types:**
+```ts
+type ImageAttachment = {
+  filename: string;     // "screenshot.png"
+  mimeType: string;     // "image/png"
+  data: string;         // base64-encoded content
+};
+```
+
+**Functions:**
+| Function | Signature | Purpose |
+|----------|-----------|---------|
+| `extractImageAttachments()` | `(message, cwd?) → {cleanedMessage, images}` | Finds `@file.ext` patterns, reads files, returns base64 |
+| `extractImageMentions()` | `(message, cwd?) → Promise<{text, images}>` | Async wrapper for use-chat.ts |
+| `hasImageReferences()` | `(message) → boolean` | Quick regex test for `@*.png` etc. |
+| `captureScreenshot()` | `(outputPath) → Promise<string>` | Platform-specific screenshot capture |
+| `captureClipboardImage()` | `(outputPath) → Promise<string>` | Read image from clipboard |
+
+**Supported extensions:** `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.svg`
+
+**Regex:** `/@([\w./-]+\.(png|jpg|jpeg|gif|webp|bmp|svg))/gi`
+
+**Vision model detection:** Models with `supportsVision: true` in `shared/models.ts` get additional image analysis instructions injected into the system prompt when images are detected in the conversation.
+
+---
+
+## All Commands Reference
+
+| Command | Description | Handler |
+|---------|-------------|--------|
+| `/new` | Start a new conversation | Creates new session |
+| `/clear` | Clear chat and go home | Navigates to home |
+| `/undo` | Revert to last checkpoint | `undoToLastCheckpoint()` |
+| `/commit` | Git commit all changes | `git add -A && git commit` |
+| `/agents` | Switch Plan/Build modes | Opens agents dialog |
+| `/models` | Select AI model | Opens models dialog |
+| `/ollama` | Browse local Ollama models | Opens ollama dialog |
+| `/skills` | Browse prompt skills | Opens skills dialog |
+| `/plugins` | View installed plugins | Opens plugins dialog |
+| `/mcp` | View/install MCP servers | Opens MCP dialog |
+| `/sessions` | Browse past sessions | Opens sessions dialog |
+| `/theme` | Change color theme | Opens theme dialog |
+| `/login` | Sign in via browser | Opens OAuth flow |
+| `/logout` | Sign out | Clears auth |
+| `/upgrade` | Buy credits | Opens Polar checkout |
+| `/usage` | Open billing portal | Opens Polar portal |
+| `/status` | Show current config | Displays config |
+| `/help` | List all commands | Shows help text |
+| `/exit` | Quit | Exits process |
+
+---
+
+## Complete New Files Reference
+
+| File | Package | Purpose |
+|------|---------|--------|
+| `token-counter.ts` | shared | Token estimation + budget allocation |
+| `context-manager.ts` | server | Priority-based context trimming |
+| `memory.ts` | cli | RAG conversation memory (BM25) |
+| `auto-lint.ts` | cli | Self-healing lint pipeline |
+| `streaming-tracker.ts` | cli | Real-time streaming metrics |
+| `ollama.ts` | cli | Ollama local model client |
+| `plugins.ts` | cli | Plugin loader + executor |
+| `skills.ts` | cli | Skills loader + built-in skills |
+| `file-watcher.ts` | cli | External file change detection |
+| `diff-renderer.ts` | cli | LCS-based rich diff engine |
+| `image-input.ts` | cli | Screenshot + clipboard image capture |
+| `mcp-client.ts` | cli | MCP protocol client |
+| `checkpoint.ts` | cli | Git checkpoint/undo system |
+| `project-context.ts` | cli | Project context injection |
+| `ollama-dialog.tsx` | cli | Ollama model browser UI |
+| `plugins-dialog.tsx` | cli | Plugin viewer UI |
+| `skills-dialog.tsx` | cli | Skills browser UI |
+| `mcp-dialog.tsx` | cli | MCP server browser UI |
+
+## Summary
+
+AgenticCoder is a **4-package monorepo** with **18+ features** where:
+
+- **`shared`** defines the contract (tool schemas, model definitions, token counter, types)
+- **`database`** stores sessions and messages in Neon PostgreSQL via Prisma
+- **`server`** orchestrates AI conversations with **token-aware context management**, authentication, and billing (Hono + AI SDK + Clerk + Polar)
+- **`cli`** renders the terminal UI and executes all 16+ tools locally with **auto-lint self-healing**, **conversation memory (RAG)**, **streaming metrics**, **plugins**, **skills**, **file watching**, **rich diffs**, **MCP protocol**, **checkpoint/undo**, **bash streaming**, **preference persistence**, and **image understanding** (React + @opentui)
+
+The AI never touches your files directly. The server acts as a relay between you and the AI model. Tool calls flow: **Server → CLI → Your Files → Auto-Lint → CLI → Server → AI → repeat (up to 25 steps)**.
