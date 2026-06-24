@@ -3,11 +3,13 @@ import type { ModeType } from "@agenticcoder/shared";
 type SystemPromptParams = {
   mode: ModeType;
   projectContext?: string;
+  hasImages?: boolean;
 };
 
 export function buildSystemPrompt({ 
   mode,
   projectContext,
+  hasImages,
 }: SystemPromptParams): string {
   const parts: string[] = [];
 
@@ -127,6 +129,18 @@ You are in build mode. Implement changes directly and professionally.
 - If editFile fails (oldString not found), re-read the file to get current content, then retry.
 - If bash returns a non-zero exit code, read the stderr and fix the issue.
 - If a file doesn't exist, create it with writeFile instead of editFile.`);
+  }
+
+  // Image understanding instructions
+  if (hasImages) {
+    parts.push(`
+## Image Analysis
+The user has attached images to this conversation. When analyzing images:
+- **UI Screenshots**: Identify layout issues, CSS problems, responsive design flaws, and accessibility concerns. Reference specific elements and suggest exact code fixes.
+- **Error Screenshots**: Read error messages, stack traces, and terminal output carefully. Identify the root cause and provide fixes.
+- **Design References**: Extract colors, typography, spacing, and layout patterns. Translate visual designs into code.
+- **Diagrams/Architecture**: Understand the system design and reference it in your implementation.
+- Always describe what you see in the image before making recommendations.`);
   }
 
   return parts.join("\n");

@@ -6,6 +6,9 @@ import {
   ThemeDialogContent,
   McpDialogContent,
   CheckpointsDialogContent,
+  OllamaDialogContent,
+  PluginsDialogContent,
+  SkillsDialogContent,
 } from "../dialogs";
 import type { Command } from "./types";
 
@@ -139,7 +142,7 @@ export const COMMANDS: Command[] = [
     value: "/help",
     action: (ctx) => {
       ctx.toast.show({
-        message: "Commands: /new /clear /undo /checkpoint /checkpoints /restore /commit /agents /models /mcp /sessions /theme /config /diff /export /copy /login /logout /upgrade /usage /help /status /exit",
+        message: "Commands: /new /clear /undo /checkpoint /checkpoints /restore /commit /agents /models /ollama /skills /plugins /mcp /sessions /theme /config /diff /export /copy /login /logout /upgrade /usage /help /status /exit",
       });
     },
   },
@@ -162,6 +165,47 @@ export const COMMANDS: Command[] = [
         title: "Select Agent",
         children: <AgentsDialogContent currentMode={ctx.mode} onSelectMode={ctx.setMode} />,
       })
+    },
+  },
+  {
+    name: "ollama",
+    description: "Browse & select local Ollama models",
+    value: "/ollama",
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "Ollama Models",
+        children: <OllamaDialogContent onSelectModel={ctx.setModel} />,
+      });
+    },
+  },
+  {
+    name: "skills",
+    description: "Browse & activate prompt skills",
+    value: "/skills",
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "Skills",
+        children: (
+          <SkillsDialogContent
+            onSelectSkill={(skill) => {
+              if (skill.mode) ctx.setMode(skill.mode);
+              // Inject skill prompt into the input bar
+              if (ctx.setInputText) ctx.setInputText(skill.prompt);
+            }}
+          />
+        ),
+      });
+    },
+  },
+  {
+    name: "plugins",
+    description: "View installed plugins",
+    value: "/plugins",
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "Plugins",
+        children: <PluginsDialogContent />,
+      });
     },
   },
   {

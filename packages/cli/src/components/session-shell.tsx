@@ -29,6 +29,7 @@ type Props = {
   inputDisabled?: boolean;
   loading?: boolean;
   interruptible?: boolean;
+  streamingStatus?: string;
 };
 
 export function SessionShell({
@@ -37,6 +38,7 @@ export function SessionShell({
   inputDisabled = false,
   loading = false,
   interruptible = false,
+  streamingStatus,
 }: Props) {
   const { mode } = usePromptConfig();
   const { colors } = useTheme();
@@ -71,8 +73,13 @@ export function SessionShell({
             <>
               <Spinner mode={mode} />
               <StreamingTimer />
+              {streamingStatus ? (
+                <text attributes={TextAttributes.DIM}>{streamingStatus}</text>
+              ) : null}
               {interruptible ? <text>esc to interrupt</text> : null}
             </>
+          ) : streamingStatus ? (
+            <text attributes={TextAttributes.DIM}>{streamingStatus}</text>
           ) : null}
         </box>
 

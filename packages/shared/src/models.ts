@@ -1,16 +1,17 @@
-// ── OpenRouter free models ──
+// ── Model definitions ──
 
 export type ModelPricing = {
   inputUsdPerMillionTokens: number;
   outputUsdPerMillionTokens: number;
 };
 
-export type SupportedProvider = "openrouter";
+export type SupportedProvider = "openrouter" | "ollama";
 
 type SupportedChatModelDefinition = {
   id: string;
   provider: SupportedProvider;
   pricing: ModelPricing;
+  supportsVision?: boolean;
 };
 
 export const SUPPORTED_CHAT_MODELS = [
@@ -99,3 +100,19 @@ export function findSupportedChatModel(modelId: string) {
 }
 
 export const DEFAULT_CHAT_MODEL_ID: SupportedChatModelId = "qwen/qwen3-coder:free";
+
+/** Check if a provider is local (no cloud API needed) */
+export function isLocalProvider(provider: SupportedProvider): boolean {
+  return provider === "ollama";
+}
+
+/** Check if a model ID refers to an Ollama model */
+export function isOllamaModel(modelId: string): boolean {
+  return modelId.startsWith("ollama:");
+}
+
+/** Check if a model supports vision/image input */
+export function modelSupportsVision(modelId: string): boolean {
+  const model = findSupportedChatModel(modelId) as (SupportedChatModelDefinition | undefined);
+  return (model as any)?.supportsVision === true;
+}

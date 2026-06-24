@@ -4,3 +4,6 @@ export { AgentsDialogContent } from "./agents-dialog";
 export { ModelsDialogContent } from "./models-dialog";
 export { McpDialogContent } from "./mcp-dialog";
 export { CheckpointsDialogContent } from "./checkpoints-dialog";
+export { OllamaDialogContent } from "./ollama-dialog";
+export { PluginsDialogContent } from "./plugins-dialog";
+export { SkillsDialogContent } from "./skills-dialog";

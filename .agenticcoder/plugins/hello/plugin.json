@@ -1,0 +1,15 @@
+{
+  "name": "hello",
+  "description": "A sample plugin that says hello — demonstrates the plugin system",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Name to greet"
+      }
+    },
+    "required": ["name"]
+  },
+  "handler": "handler.sh"
+}

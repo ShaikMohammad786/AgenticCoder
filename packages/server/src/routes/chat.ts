@@ -23,7 +23,8 @@ import { requireCreditsBalance } from "../middleware/require-credits-balance";
 import { calculateCreditsForUsage } from "../lib/credits";
 import { ingestAiUsage } from "../lib/polar";
 import { isSupportedChatModel, resolveChatModel } from "../lib/models";
-import { findSupportedChatModel } from "@agenticcoder/shared";
+import { findSupportedChatModel, estimateTokens } from "@agenticcoder/shared";
+import { manageContext } from "../lib/context-manager";
 
 type ChatMessageMetadata = {
   mode?: ModeType;
@@ -51,6 +52,7 @@ const submitSchema = z.object({
     description: z.string(),
     inputSchema: z.record(z.unknown()),
   })).optional(),
+  memories: z.string().optional(),
 });
 
 const submitValidator = zValidator("json", submitSchema, (result, c) => {
@@ -108,7 +110,7 @@ const app = new Hono<AuthenticatedEnv>()
           return c.json({ error: "Too many requests. Please slow down." }, 429);
         }
 
-        const { id, messages, mode, model, projectContext, mcpTools } = c.req.valid("json");
+        const { id, messages, mode, model, projectContext, mcpTools, memories } = c.req.valid("json");
 
         const session = await db.session.findUnique({
           where: { id, userId },
@@ -157,16 +159,22 @@ const app = new Hono<AuthenticatedEnv>()
           (m) => m.id && Array.isArray(m.parts) && m.parts.length > 0
         );
 
-        // Context window trimming — keep only the latest N messages to prevent
-        // exceeding model context limits on long conversations.
-        // Always include the first user message for context, then the latest messages.
-        const MAX_CONTEXT_MESSAGES = 50;
-        let trimmedMessages = validMessages;
-        if (validMessages.length > MAX_CONTEXT_MESSAGES) {
-          const first = validMessages[0];
-          const latest = validMessages.slice(-MAX_CONTEXT_MESSAGES + 1);
-          trimmedMessages = first ? [first, ...latest] : latest;
-        }
+        // Build system prompt with memories
+        const systemPromptBase = buildSystemPrompt({ mode, hasImages: false });
+        const fullSystemPrompt = systemPromptBase
+          + (memories ? "\n" + memories : "")
+          + (projectContext ? "\n\n" + projectContext : "");
+
+        // Token-aware context window management
+        const systemTokens = estimateTokens(fullSystemPrompt);
+        const projectTokens = projectContext ? estimateTokens(projectContext) : 0;
+        const contextResult = manageContext(
+          validMessages as any[],
+          systemTokens,
+          projectTokens,
+          32768, // Most free models support 32K+ context
+        );
+        const trimmedMessages = contextResult.messages as agenticcoderUIMessage[];
 
         // Use builtInTools for validation (requires proper types)
         const nextMessages = await validateUIMessages<agenticcoderUIMessage>({
@@ -176,15 +184,20 @@ const app = new Hono<AuthenticatedEnv>()
         const modelMessages = await convertToModelMessages(nextMessages, { tools: builtInTools });
         let completedUsage: LanguageModelUsage | null = null;
 
-        console.log(`[chat] session=${id} model=${model} mode=${mode} msgs=${validMessages.length}${validMessages.length > MAX_CONTEXT_MESSAGES ? ` (trimmed to ${trimmedMessages.length})` : ''}`);
+        console.log(`[chat] session=${id} model=${model} mode=${mode} msgs=${validMessages.length}${contextResult.trimmedCount > 0 ? ` (trimmed ${contextResult.trimmedCount}, ~${contextResult.totalTokens} tokens)` : ''} budget=${contextResult.budget.maxContextTokens}`);
 
         // Request timeout — abort if AI takes longer than 120s
         const abortController = new AbortController();
         const requestTimeout = setTimeout(() => abortController.abort(), 120_000);
 
+        const hasImages = trimmedMessages.some((m) =>
+          m.parts?.some((p: any) => p.type === "file" && p.mediaType?.startsWith("image/"))
+          || (m as any).experimental_attachments?.length > 0
+        );
+
         const result = streamText({
           model: resolvedModel.model,
-          system: buildSystemPrompt({ mode }) + (projectContext ? "\n\n" + projectContext : ""),
+          system: fullSystemPrompt,
           messages: modelMessages,
           tools: allTools,
           maxSteps: 25,
@@ -260,6 +273,9 @@ const app = new Hono<AuthenticatedEnv>()
             }
 
             if (!completedUsage) return;
+
+            // Skip billing for local models (Ollama)
+            if (resolvedModel.isLocal) return;
 
             // Skip billing for free models (all pricing is $0)
             const pricing = findSupportedChatModel(resolvedModel.modelId)?.pricing;

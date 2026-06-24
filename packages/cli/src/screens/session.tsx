@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams, useLocation, useNavigate } from "react-router";
 import { z } from "zod";
 import { useKeyboard } from "@opentui/react";
@@ -17,6 +17,7 @@ import type { Message } from "../hooks/use-chat";
 import { apiClient } from "../lib/api-client";
 import { getErrorMessage } from "../lib/http-errors";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
+import { getFileWatcher, formatFileChanges } from "../lib/file-watcher";
 
 type SessionData = InferResponseType<(typeof apiClient.sessions)[":id"]["$get"], 200>;
 
@@ -71,18 +72,27 @@ function SessionChat({
   const [initialMessages] = useState(() => session.messages as unknown as Message[]);
   const { mode, model } = usePromptConfig();
   const { isTopLayer } = useKeyboardLayer();
-  const { messages, status, submit, abort, interrupt, error, bashOutput, isBashStreaming } = useChat(
+  const toast = useToast();
+  const { messages, status, submit, abort, interrupt, error, bashOutput, isBashStreaming, streamMetrics } = useChat(
     session.id,
     initialMessages
   );
   const hasSubmittedInitialPromptRef = useRef(false);
 
   // Stop the pending reply when the user leaves this session.
+  // Also start/stop file watcher.
   useEffect(() => {
+    const watcher = getFileWatcher();
+    watcher.start(process.cwd(), (event) => {
+      toast.show({
+        message: formatFileChanges(event.files),
+      });
+    });
     return () => {
+      watcher.stop();
       void abort();
     };
-  }, [abort]);
+  }, [abort, toast]);
 
   // Let the user cancel a reply even before the first streamed chunk arrives.
   useKeyboard((key) => {
@@ -102,11 +112,29 @@ function SessionChat({
     });
   }, [initialPrompt, submit]);
 
+  // Build streaming status text
+  const streamingStatus = useMemo(() => {
+    if (!streamMetrics) return undefined;
+    const parts: string[] = [];
+    if (streamMetrics.tokensPerSecond > 0) parts.push(`⚡ ${streamMetrics.tokensPerSecond} tok/s`);
+    const secs = (streamMetrics.elapsedMs / 1000).toFixed(1);
+    parts.push(`⏱ ${secs}s`);
+    if (streamMetrics.tokensGenerated > 0) {
+      const tkn = streamMetrics.tokensGenerated >= 1000
+        ? `${(streamMetrics.tokensGenerated / 1000).toFixed(1)}K`
+        : String(streamMetrics.tokensGenerated);
+      parts.push(`📊 ${tkn}`);
+    }
+    if (streamMetrics.estimatedCost > 0.0001) parts.push(`💰 $${streamMetrics.estimatedCost.toFixed(4)}`);
+    return parts.length > 0 ? parts.join("  │  ") : undefined;
+  }, [streamMetrics]);
+
   return (
     <SessionShell
       onSubmit={(text) => submit({ userText: text, mode, model })}
       loading={status === "submitted" || status === "streaming"}
       interruptible={status === "submitted" || status === "streaming"}
+      streamingStatus={streamingStatus}
     >
       {messages.map((msg) => (
         <ChatMessage key={msg.id} msg={msg} bashOutput={bashOutput} isBashStreaming={isBashStreaming} />

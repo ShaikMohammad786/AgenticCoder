@@ -3,6 +3,10 @@ import { dirname, extname, isAbsolute, join, relative, resolve } from "path";
 import { toolInputSchemas, Mode, type ModeType } from "@agenticcoder/shared";
 import { createCheckpoint, cleanupCheckpoints } from "./checkpoint";
 import { isMcpTool, executeMcpTool } from "./mcp-client";
+import { isPluginTool, getPluginName } from "./plugins";
+import { getFileWatcher } from "./file-watcher";
+import { quickDiff } from "./diff-renderer";
+import { autoLint, formatLintResult } from "./auto-lint";
 
 const MAX_FILE_SIZE = 10_000;
 const MAX_RESULTS = 200;
@@ -319,25 +323,41 @@ export async function executeLocalTool(
     case "writeFile": {
       const { path, content } = toolInputSchemas.writeFile.parse(input);
       const { cwd, resolved } = resolveInsideCwd(path);
+      const relPath = relative(cwd, resolved);
       await mkdir(dirname(resolved), { recursive: true });
       await writeFile(resolved, content, "utf-8");
+      getFileWatcher().markAiWritten(relPath.replace(/\\/g, "/"));
+      // Auto-lint check
+      const lint = await autoLint(relPath, cwd).catch(() => null);
       return {
         success: true as const,
-        path: relative(cwd, resolved),
+        path: relPath,
         bytesWritten: Buffer.byteLength(content, "utf-8"),
+        ...(lint && !lint.passed ? { lint: formatLintResult(lint) } : {}),
       };
     }
     case "editFile": {
       const { path, oldString, newString } = toolInputSchemas.editFile.parse(input);
       const { cwd, resolved } = resolveInsideCwd(path);
+      const relPath = relative(cwd, resolved);
       const content = await readFile(resolved, "utf-8");
       const occurrences = content.split(oldString).length - 1;
 
       if (occurrences === 0) throw new Error("oldString not found in file");
       if (occurrences > 1) throw new Error(`oldString is ambiguous; found ${occurrences} matches`);
 
-      await writeFile(resolved, content.replace(oldString, newString), "utf-8");
-      return { success: true as const, path: relative(cwd, resolved) };
+      const newContent = content.replace(oldString, newString);
+      await writeFile(resolved, newContent, "utf-8");
+      getFileWatcher().markAiWritten(relPath.replace(/\\/g, "/"));
+      const diff = quickDiff(oldString, newString, relPath);
+      // Auto-lint check
+      const lint = await autoLint(relPath, cwd).catch(() => null);
+      return {
+        success: true as const,
+        path: relPath,
+        diff,
+        ...(lint && !lint.passed ? { lint: formatLintResult(lint) } : {}),
+      };
     }
     case "bash": {
       const { command, timeout = DEFAULT_TIMEOUT } = toolInputSchemas.bash.parse(input);
@@ -522,6 +542,7 @@ export async function executeLocalTool(
     case "searchReplace": {
       const { path, search, replace, isRegex } = toolInputSchemas.searchReplace.parse(input);
       const { cwd, resolved } = resolveInsideCwd(path);
+      const relPath = relative(cwd, resolved);
       const content = await readFile(resolved, "utf-8");
 
       let newContent: string;
@@ -539,7 +560,17 @@ export async function executeLocalTool(
       }
 
       await writeFile(resolved, newContent, "utf-8");
-      return { success: true as const, path: relative(cwd, resolved), replacements };
+      getFileWatcher().markAiWritten(relPath.replace(/\\/g, "/"));
+      const diff = quickDiff(content, newContent, relPath);
+      // Auto-lint check
+      const lint = await autoLint(relPath, cwd).catch(() => null);
+      return {
+        success: true as const,
+        path: relPath,
+        replacements,
+        diff,
+        ...(lint && !lint.passed ? { lint: formatLintResult(lint) } : {}),
+      };
     }
     case "thinkOut": {
       const { thought } = toolInputSchemas.thinkOut.parse(input);
@@ -612,6 +643,17 @@ export async function executeLocalTool(
       };
     }
     default:
+      // Route plugin tools
+      if (isPluginTool(toolName)) {
+        const { loadPlugins, executePlugin } = await import("./plugins");
+        const plugins = await loadPlugins();
+        const pluginName = getPluginName(toolName);
+        const plugin = plugins.find((p) => p.name === pluginName);
+        if (!plugin) throw new Error(`Plugin not found: ${pluginName}`);
+        const result = await executePlugin(plugin, input);
+        return { output: result };
+      }
+
       // Route MCP tools to the MCP client
       if (isMcpTool(toolName)) {
         try {

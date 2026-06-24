@@ -109,3 +109,131 @@ export async function extractImageMentions(
   const result = extractImageAttachments(message, cwd);
   return { text: result.cleanedMessage, images: result.images, warnings: result.warnings };
 }
+
+/**
+ * Capture a screenshot and return it as a base64 image attachment.
+ * Works on Windows (PowerShell), macOS (screencapture), and Linux (gnome-screenshot).
+ */
+export async function captureScreenshot(): Promise<{
+  image: ImageAttachment | null;
+  error?: string;
+}> {
+  const { join } = await import("path");
+  const { tmpdir } = await import("os");
+  const { readFileSync, unlinkSync, existsSync } = await import("fs");
+
+  const tmpPath = join(tmpdir(), `agenticcoder-screenshot-${Date.now()}.png`);
+
+  try {
+    let cmd: string[];
+    const platform = process.platform;
+
+    if (platform === "win32") {
+      // PowerShell screenshot using .NET
+      cmd = [
+        "powershell", "-NoProfile", "-Command",
+        `Add-Type -AssemblyName System.Windows.Forms; ` +
+        `$screen = [System.Windows.Forms.Screen]::PrimaryScreen; ` +
+        `$bitmap = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height); ` +
+        `$graphics = [System.Drawing.Graphics]::FromImage($bitmap); ` +
+        `$graphics.CopyFromScreen($screen.Bounds.Location, [System.Drawing.Point]::Empty, $screen.Bounds.Size); ` +
+        `$bitmap.Save('${tmpPath.replace(/'/g, "''")}'); ` +
+        `$graphics.Dispose(); $bitmap.Dispose();`,
+      ];
+    } else if (platform === "darwin") {
+      cmd = ["screencapture", "-x", tmpPath];
+    } else {
+      // Linux — try gnome-screenshot, fallback to scrot
+      cmd = ["gnome-screenshot", "-f", tmpPath];
+    }
+
+    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+
+    if (exitCode !== 0 || !existsSync(tmpPath)) {
+      return { image: null, error: "Screenshot capture failed" };
+    }
+
+    const buffer = readFileSync(tmpPath);
+    const base64 = buffer.toString("base64");
+
+    // Cleanup temp file
+    try { unlinkSync(tmpPath); } catch {}
+
+    return {
+      image: {
+        path: "screenshot.png",
+        mimeType: "image/png",
+        base64,
+      },
+    };
+  } catch (err) {
+    try { unlinkSync(tmpPath); } catch {}
+    return {
+      image: null,
+      error: err instanceof Error ? err.message : "Screenshot failed",
+    };
+  }
+}
+
+/**
+ * Capture image from clipboard (if available).
+ */
+export async function captureClipboardImage(): Promise<{
+  image: ImageAttachment | null;
+  error?: string;
+}> {
+  const { join } = await import("path");
+  const { tmpdir } = await import("os");
+  const { readFileSync, unlinkSync, existsSync } = await import("fs");
+
+  const tmpPath = join(tmpdir(), `agenticcoder-clipboard-${Date.now()}.png`);
+
+  try {
+    const platform = process.platform;
+    let cmd: string[];
+
+    if (platform === "win32") {
+      cmd = [
+        "powershell", "-NoProfile", "-Command",
+        `$img = Get-Clipboard -Format Image; ` +
+        `if ($img) { $img.Save('${tmpPath.replace(/'/g, "''")}') } ` +
+        `else { exit 1 }`,
+      ];
+    } else if (platform === "darwin") {
+      cmd = ["bash", "-c", `osascript -e 'set the clipboard to (the clipboard as «class PNGf»)' && pbpaste > '${tmpPath}'`];
+    } else {
+      cmd = ["xclip", "-selection", "clipboard", "-t", "image/png", "-o", tmpPath];
+    }
+
+    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+
+    if (exitCode !== 0 || !existsSync(tmpPath)) {
+      return { image: null, error: "No image in clipboard" };
+    }
+
+    const buffer = readFileSync(tmpPath);
+    if (buffer.length < 100) {
+      try { unlinkSync(tmpPath); } catch {}
+      return { image: null, error: "No image in clipboard" };
+    }
+
+    const base64 = buffer.toString("base64");
+    try { unlinkSync(tmpPath); } catch {}
+
+    return {
+      image: {
+        path: "clipboard.png",
+        mimeType: "image/png",
+        base64,
+      },
+    };
+  } catch (err) {
+    try { unlinkSync(tmpPath); } catch {}
+    return {
+      image: null,
+      error: err instanceof Error ? err.message : "Clipboard capture failed",
+    };
+  }
+}

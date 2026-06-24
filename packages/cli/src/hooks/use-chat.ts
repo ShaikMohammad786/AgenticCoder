@@ -14,6 +14,9 @@ import { executeLocalTool } from "../lib/local-tools";
 import { buildProjectContext } from "../lib/project-context";
 import { extractImageMentions } from "../lib/image-input";
 import { initializeMcp, getAllMcpTools, hasMcpConfig } from "../lib/mcp-client";
+import { loadPlugins, pluginsToToolDefinitions, type Plugin } from "../lib/plugins";
+import { retrieveRelevantMemories, extractLearnings, saveMemories, formatMemoriesForPrompt } from "../lib/memory";
+import { getStreamingTracker, type StreamMetrics } from "../lib/streaming-tracker";
 
 export type ChatMessageMetadata = {
   mode?: ModeType;
@@ -39,6 +42,17 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
   // MCP tools cache
   const mcpToolsRef = useRef<ReturnType<typeof getAllMcpTools> | null>(null);
   const mcpInitializedRef = useRef(false);
+
+  // Plugin tools cache
+  const pluginsRef = useRef<Plugin[]>([]);
+  const pluginsLoadedRef = useRef(false);
+
+  // Memory cache
+  const memoriesRef = useRef<string>("");
+  const memoriesLoadedRef = useRef(false);
+
+  // Streaming metrics
+  const [streamMetrics, setStreamMetrics] = useState<StreamMetrics | null>(null);
 
   // Bash streaming state (local to session, no provider needed)
   const [bashOutput, setBashOutput] = useState("");
@@ -77,6 +91,33 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
         console.error("[mcp] Failed to initialize MCP servers:", err instanceof Error ? err.message : String(err));
       });
     }
+    // Load plugins
+    if (!pluginsLoadedRef.current) {
+      pluginsLoadedRef.current = true;
+      loadPlugins().then((plugins) => {
+        pluginsRef.current = plugins;
+        if (plugins.length > 0) {
+          console.error(`[plugins] Loaded ${plugins.length} plugin(s): ${plugins.map((p) => p.name).join(", ")}`);
+        }
+      }).catch((err) => {
+        console.error("[plugins] Failed to load plugins:", err instanceof Error ? err.message : String(err));
+      });
+    }
+    // Load relevant memories for this session
+    if (!memoriesLoadedRef.current) {
+      memoriesLoadedRef.current = true;
+      retrieveRelevantMemories(
+        projectContextRef.current ?? process.cwd(),
+        process.cwd(),
+      ).then((memories) => {
+        if (memories.length > 0) {
+          memoriesRef.current = formatMemoriesForPrompt(memories);
+          console.error(`[memory] Loaded ${memories.length} relevant memories`);
+        }
+      }).catch((err) => {
+        console.error("[memory] Failed to load memories:", err instanceof Error ? err.message : String(err));
+      });
+    }
   }, []);
 
   const transport = useMemo(() => {
@@ -106,6 +147,12 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
           inputSchema: t.inputSchema,
         })) ?? [];
 
+        // Build plugin tool definitions
+        const pluginTools = pluginsToToolDefinitions(pluginsRef.current);
+
+        // Combine external tools (MCP + plugins)
+        const externalTools = [...mcpTools, ...pluginTools];
+
         return {
           body: {
             id: sessionId,
@@ -114,8 +161,10 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
             model: message.metadata?.model ?? metadata?.model,
             // Send project context (AGENT.md + detected framework info)
             projectContext: projectContextRef.current ?? undefined,
-            // Send MCP tool definitions so server can expose them to AI
-            mcpTools: mcpTools.length > 0 ? mcpTools : undefined,
+            // Send MCP + plugin tool definitions so server can expose them to AI
+            mcpTools: externalTools.length > 0 ? externalTools : undefined,
+            // Send remembered context from previous sessions
+            memories: memoriesRef.current || undefined,
           },
         }
       }
@@ -167,13 +216,51 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
   });
 
+  // Track streaming progress
+  useEffect(() => {
+    const tracker = getStreamingTracker();
+    if (chat.status === "streaming") {
+      // Start tracking on first streaming status
+      const lastMsg = chat.messages.at(-1);
+      if (lastMsg?.role === "assistant") {
+        const text = (lastMsg.parts ?? [])
+          .filter((p) => p.type === "text" && "text" in p)
+          .map((p) => (p as { text: string }).text)
+          .join("");
+        tracker.onChunk(text.slice(-50)); // Feed latest chunk
+        setStreamMetrics(tracker.getMetrics());
+      }
+    } else if (chat.status === "ready") {
+      tracker.stop();
+      const final = tracker.getMetrics();
+      if (final.tokensGenerated > 0) {
+        setStreamMetrics(final);
+      }
+      // Extract and save learnings when conversation settles
+      if (chat.messages.length > 2) {
+        const msgs = chat.messages.map((m) => ({
+          role: m.role,
+          parts: m.parts?.map((p) => ({ type: p.type, text: "text" in p ? (p as any).text : undefined })),
+        }));
+        const learnings = extractLearnings(msgs, process.cwd());
+        if (learnings.length > 0) {
+          saveMemories(learnings).catch(() => {});
+        }
+      }
+    }
+  }, [chat.status, chat.messages]);
+
   return {
     messages: chat.messages,
     status: chat.status,
     error: chat.error,
     bashOutput,
     isBashStreaming,
-    submit: async (params: { userText: string; mode: ModeType; model: SupportedChatModelId }) => {
+    streamMetrics,
+    submit: async (params: { userText: string; mode: ModeType; model: SupportedChatModelId | string }) => {
+      // Start streaming tracker
+      getStreamingTracker().start();
+
       // Extract image mentions (@file.png) and convert to multimodal parts
       const { text, images, warnings } = await extractImageMentions(params.userText);
 
@@ -191,12 +278,12 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
             mode: params.mode,
             model: params.model,
           },
-          experimental_attachments: images.map((img) => ({
-            name: img.path,
-            contentType: img.mimeType,
-            url: `data:${img.mimeType};base64,${img.base64}`,
-          })),
-        });
+          files: images.map((img) => new File(
+            [Buffer.from(img.base64, "base64")],
+            img.path,
+            { type: img.mimeType },
+          )),
+        } as any);
       }
 
       return chat.sendMessage({

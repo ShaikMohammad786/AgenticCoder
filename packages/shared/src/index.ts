@@ -2,6 +2,9 @@ export {
   SUPPORTED_CHAT_MODELS,
   DEFAULT_CHAT_MODEL_ID,
   findSupportedChatModel,
+  isLocalProvider,
+  isOllamaModel,
+  modelSupportsVision,
   type ModelPricing,
   type SupportedProvider,
   type SupportedChatModel,
@@ -16,3 +19,12 @@ export {
   type ToolContracts,
   type ModeType,
 } from "./schemas";
+
+export {
+  estimateTokens,
+  estimateMessageTokens,
+  getTokenBudget,
+  formatTokenCount,
+  contextFillPercent,
+  type TokenBudget,
+} from "./token-counter";

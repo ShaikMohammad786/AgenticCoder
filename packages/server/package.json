@@ -6,7 +6,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-   "dev": "bun run --hot src/index.ts",
+    "dev": "bun run --hot src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "postinstall": "bun run --cwd ../database db:generate"
   },
@@ -25,6 +25,7 @@
     "ai": "^6.0.205",
     "dotenv": "^17.4.1",
     "hono": "^4.12.12",
+    "ollama-ai-provider": "^1.2.0",
     "zod": "^4.3.6"
   }
 }

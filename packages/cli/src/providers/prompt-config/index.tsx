@@ -57,8 +57,8 @@ type PromptConfigContextValue = {
   mode: ModeType;
   toggleMode: () => void;
   setMode: (mode: ModeType) => void;
-  model: SupportedChatModelId;
-  setModel: (model: SupportedChatModelId) => void;
+  model: SupportedChatModelId | string;
+  setModel: (model: SupportedChatModelId | string) => void;
 };
 
 const PromptConfigContext = createContext<PromptConfigContextValue | null>(null);
@@ -77,14 +77,14 @@ type PromptConfigProviderProps = {
 
 export function PromptConfigProvider({ children }: PromptConfigProviderProps) {
   const [mode, setModeState] = useState<ModeType>(getInitialMode);
-  const [model, setModelState] = useState<SupportedChatModelId>(getInitialModel);
+  const [model, setModelState] = useState<SupportedChatModelId | string>(getInitialModel);
 
   const setMode = useCallback((m: ModeType) => {
     setModeState(m);
     savePreferences({ mode: m });
   }, []);
 
-  const setModel = useCallback((m: SupportedChatModelId) => {
+  const setModel = useCallback((m: SupportedChatModelId | string) => {
     setModelState(m);
     savePreferences({ model: m });
   }, []);
