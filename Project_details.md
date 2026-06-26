@@ -59,7 +59,7 @@ AgenticCoder is an **AI-powered coding assistant** that runs entirely in your te
 │  ┌───────────────────┐         ┌──────────────────────┐    │
 │  │   CLI (Terminal)   │ ◄────► │   Server (Port 3000)  │    │
 │  │                   │  HTTP   │                      │    │
-│  │  • React UI       │         │  • Hono framework    │    │
+│  │  • React UI       │         │  • Express framework │    │
 │  │  • @opentui       │         │  • AI SDK            │    │
 │  │  • local-tools.ts │         │  • Clerk auth        │    │
 │  │    (16 tools)     │         │  • Polar billing     │    │
@@ -80,7 +80,7 @@ AgenticCoder is an **AI-powered coding assistant** that runs entirely in your te
 ```
 
 **Three processes run:**
-1. **Server** (`bun run dev:server`) — Hono HTTP server on port 3000
+1. **Server** (`bun run dev:server`) — Express HTTP server on port 3000
 2. **CLI** (`bun run dev:cli`) — Terminal React app
 3. **Database** — Neon PostgreSQL (hosted, no local process)
 
@@ -424,14 +424,13 @@ import type { Prisma } from "@agenticcoder/database";
 
 ## 6. Package: `server`
 
-**Purpose:** Hono HTTP API server. Handles authentication, chat streaming, session management, and billing. **Does NOT execute tools** — only relays AI messages.
+**Purpose:** Express HTTP API server. Handles authentication, chat streaming, session management, and billing. **Does NOT execute tools** — only relays AI messages.
 
 ### `packages/server/src/index.ts` — Server Entry Point
 
 ```typescript
-import { Hono } from "hono";
-import { HTTPException } from "hono/http-exception";
-import { sentry } from "@sentry/hono/bun";
+import express from "express";
+import * as Sentry from "@sentry/bun";
 import { requireAuth } from "./middleware/require-auth";
 import { rateLimit } from "./middleware/rate-limit";
 import sessions from "./routes/sessions";
@@ -439,41 +438,38 @@ import chat from "./routes/chat";
 import auth from "./routes/auth";
 import billing from "./routes/billing";
 
-const app = new Hono();
+// Sentry error tracking
+Sentry.init({ dsn: "...", tracesSampleRate: 1.0 });
 
-// Sentry error tracking (captures unhandled errors)
-app.use(sentry(app, { dsn: "...", tracesSampleRate: 1.0, enableLogs: true }));
+const app = express();
 
-// Global error handler — catches HTTPException and unknown errors
-app.onError((error, c) => {
-  if (error instanceof HTTPException) {
-    return c.json({ error: error.message || "Request failed" }, error.status);
-  }
-  console.error("Unhandled server error", error);
-  return c.json({ error: "Internal server error" }, 500);
+// Parse JSON bodies
+app.use(express.json({ limit: "10mb" }));
+
+// Global error handler
+app.use((err, _req, res, _next) => {
+  console.error("Unhandled server error", err);
+  res.status(500).json({ error: "Internal server error" });
 });
 
 // Middleware — applied per route prefix
-app.use("/sessions/*", requireAuth);     // All session routes need auth
-app.use("/chat/*", requireAuth);         // All chat routes need auth
-app.use("/chat/*", rateLimit);           // Chat also gets rate-limited
+app.use("/sessions", requireAuth);       // All session routes need auth
+app.use("/chat", requireAuth);           // All chat routes need auth
+app.use("/chat", rateLimit);             // Chat also gets rate-limited
 app.use("/billing/checkout", requireAuth);
 app.use("/billing/portal", requireAuth);
 
-// Mount route modules
-const routes = app
-  .route("/auth", auth)          // GET /auth/callback
-  .route("/billing", billing)    // POST /billing/checkout, /billing/portal
-  .route("/sessions", sessions)  // CRUD for sessions
-  .route("/chat", chat);         // POST /chat (streaming)
+// Mount route modules (Express Router)
+app.use("/auth", auth);          // GET /auth/callback
+app.use("/billing", billing);    // POST /billing/checkout, /billing/portal
+app.use("/sessions", sessions);  // CRUD for sessions
+app.use("/chat", chat);          // POST /chat (streaming)
 
-// Export type for CLI to infer API types (Hono RPC)
-export type AppType = typeof routes;
+app.listen(3000, () => {
+  console.log("AgenticCoder server running on port 3000");
+});
 
-// Bun server config
-export default { port: 3000, fetch: app.fetch, idleTimeout: 255 };
-// idleTimeout: 255 = max seconds a connection stays open
-// High because AI tool call loops can take 2+ minutes
+export default app;
 ```
 
 ---
@@ -503,10 +499,11 @@ export const requireAuth = createMiddleware<AuthenticatedEnv>(async (c, next) =>
 
 **How it works:**
 1. Extracts the `Authorization: Bearer <token>` header from the request
-2. Validates the token with Clerk's backend SDK
-3. Extracts the `userId` from the token
-4. Stores it in Hono's context (`c.set("userId", ...)`)
-5. All downstream route handlers can access `c.get("userId")`
+2. Converts Express request to Web Fetch Request for Clerk's SDK
+3. Validates the token with Clerk's backend SDK
+4. Extracts the `userId` from the token
+5. Stores it on the request object (`(req as AuthenticatedRequest).userId`)
+6. All downstream route handlers can access `req.userId`
 
 #### `middleware/rate-limit.ts` — Rate Limiting
 
@@ -1086,11 +1083,13 @@ export const apiClient = hc<AppType>(config.apiUrl, {
 });
 ```
 
-`hc<AppType>` is Hono's **type-safe RPC client**. Because we import `AppType` from the server, the client knows every route, parameter, and response type at compile time:
+The API client is a plain `fetch` wrapper that provides a convenient interface for calling server endpoints:
 ```typescript
-apiClient.sessions.$get()           // → GET /sessions
-apiClient.sessions[":id"].$get()    // → GET /sessions/:id
-apiClient.chat.$post()              // → POST /chat
+apiClient.sessions.$get()                         // → GET /sessions
+apiClient.sessions[":id"].$get({param: {id}})     // → GET /sessions/:id
+apiClient.sessions[":id"].$delete({param: {id}})  // → DELETE /sessions/:id
+apiClient.chat.$post({json: body})                // → POST /chat
+apiClient.billing.checkout.$post()                // → POST /billing/checkout
 ```
 
 #### `lib/auth.ts` — Token Storage
@@ -1469,7 +1468,7 @@ AgenticCoder is a **4-package monorepo** where:
 
 - **`shared`** defines the contract (tool schemas, model definitions, token counter, types)
 - **`database`** stores sessions and messages in Neon PostgreSQL via Prisma
-- **`server`** orchestrates AI conversations with token-aware context management, authentication, and billing (Hono + AI SDK + Clerk + Polar)
+- **`server`** orchestrates AI conversations with token-aware context management, authentication, and billing (Express + AI SDK + Clerk + Polar)
 - **`cli`** renders the terminal UI and executes all 16+ tools locally with auto-lint self-healing, conversation memory, streaming metrics, plugins, skills, file watching, and rich diffs (React + @opentui)
 
 The AI never touches your files directly. The server acts as a relay between you and the AI model. Tool calls flow: **Server → CLI → Your Files → Auto-Lint → CLI → Server → AI → repeat (up to 25 steps)**.
@@ -2153,7 +2152,7 @@ AgenticCoder is a **4-package monorepo** with **18+ features** where:
 
 - **`shared`** defines the contract (tool schemas, model definitions, token counter, types)
 - **`database`** stores sessions and messages in Neon PostgreSQL via Prisma
-- **`server`** orchestrates AI conversations with **token-aware context management**, authentication, and billing (Hono + AI SDK + Clerk + Polar)
+- **`server`** orchestrates AI conversations with **token-aware context management**, authentication, and billing (Express + AI SDK + Clerk + Polar)
 - **`cli`** renders the terminal UI and executes all 16+ tools locally with **auto-lint self-healing**, **conversation memory (RAG)**, **streaming metrics**, **plugins**, **skills**, **file watching**, **rich diffs**, **MCP protocol**, **checkpoint/undo**, **bash streaming**, **preference persistence**, and **image understanding** (React + @opentui)
 
 The AI never touches your files directly. The server acts as a relay between you and the AI model. Tool calls flow: **Server → CLI → Your Files → Auto-Lint → CLI → Server → AI → repeat (up to 25 steps)**.

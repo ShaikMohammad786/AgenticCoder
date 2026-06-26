@@ -3,7 +3,6 @@ import { useParams, useLocation, useNavigate } from "react-router";
 import { z } from "zod";
 import { useKeyboard } from "@opentui/react";
 import { type ModeType, type SupportedChatModelId } from "@agenticcoder/shared";
-import type { InferResponseType } from "hono/client";
 import { SessionShell } from "../components/session-shell";
 import { 
   UserMessage, 
@@ -19,7 +18,14 @@ import { getErrorMessage } from "../lib/http-errors";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { getFileWatcher, formatFileChanges } from "../lib/file-watcher";
 
-type SessionData = InferResponseType<(typeof apiClient.sessions)[":id"]["$get"], 200>;
+type SessionData = {
+  id: string;
+  title: string;
+  userId: string;
+  messages: unknown;
+  createdAt: string;
+  updatedAt: string;
+};
 
 const sessionLocationSchema = z.object({
   session: z.custom<SessionData>((val) => val != null && typeof val === "object" && "id" in val),

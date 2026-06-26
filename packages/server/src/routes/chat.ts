@@ -1,5 +1,5 @@
-import { Hono } from "hono";
-import { zValidator } from "@hono/zod-validator";
+import { Router } from "express";
+import type { Request, Response } from "express";
 import { z } from "zod";
 import {
   convertToModelMessages,
@@ -18,7 +18,7 @@ import {
   type ToolContracts
 } from "@agenticcoder/shared";
 import { buildSystemPrompt } from "../system-prompts";
-import type { AuthenticatedEnv } from "../middleware/require-auth";
+import type { AuthenticatedRequest } from "../middleware/require-auth";
 import { requireCreditsBalance } from "../middleware/require-credits-balance";
 import { calculateCreditsForUsage } from "../lib/credits";
 import { ingestAiUsage } from "../lib/polar";
@@ -35,17 +35,18 @@ type ChatMessageMetadata = {
 
 type agenticcoderUIMessage = UIMessage<ChatMessageMetadata, never, InferUITools<ToolContracts>>;
 
+const messageSchema = z.object({
+  id: z.string(),
+  role: z.enum(["user", "assistant"]),
+  parts: z.array(z.record(z.unknown())),
+  metadata: z.record(z.unknown()).optional(),
+});
+
 const submitSchema = z.object({
   id: z.string(),
-  messages: z
-    .array(
-      z.custom<agenticcoderUIMessage>((value) => {
-        return value != null && typeof value === "object" && "id" in value && "parts" in value;
-      }),
-    )
-    .min(1),
+  messages: z.array(messageSchema),
   mode: modeSchema,
-  model: z.string().refine(isSupportedChatModel, "Unsupported model"),
+  model: z.string(),
   projectContext: z.string().optional(),
   mcpTools: z.array(z.object({
     name: z.string(),
@@ -53,12 +54,6 @@ const submitSchema = z.object({
     inputSchema: z.record(z.unknown()),
   })).optional(),
   memories: z.string().optional(),
-});
-
-const submitValidator = zValidator("json", submitSchema, (result, c) => {
-  if (!result.success) {
-    return c.json({ error: "Invalid request body" }, 400);
-  }
 });
 
 function hasPendingToolCalls(message: agenticcoderUIMessage) {
@@ -96,161 +91,155 @@ setInterval(() => {
   }
 }, 300_000);
 
-const app = new Hono<AuthenticatedEnv>()
-  .post(
-    "/",
-    requireCreditsBalance,
-    submitValidator,
-    async (c) => {
-      try {
-        const userId = c.get("userId");
+const router = Router();
 
-        // Rate limiting
-        if (!checkRateLimit(userId)) {
-          return c.json({ error: "Too many requests. Please slow down." }, 429);
+router.post(
+  "/",
+  requireCreditsBalance,
+  async (req: Request, res: Response) => {
+    try {
+      const userId = (req as AuthenticatedRequest).userId;
+
+      // Rate limiting
+      if (!checkRateLimit(userId)) {
+        res.status(429).json({ error: "Too many requests. Please slow down." });
+        return;
+      }
+
+      // Validate request body
+      const parsed = submitSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid request body" });
+        return;
+      }
+
+      const { id, messages, mode, model, projectContext, mcpTools, memories } = parsed.data;
+
+      const session = await db.session.findUnique({
+        where: { id, userId },
+      });
+
+      if (!session) {
+        res.status(404).json({ error: "Session not found" });
+        return;
+      }
+
+      const startTime = Date.now();
+      const builtInTools = getToolContracts(mode);
+
+      // Merge MCP tools with built-in tools for the AI
+      const allTools: Record<string, any> = { ...builtInTools };
+      if (mcpTools && mcpTools.length > 0) {
+        for (const mcpTool of mcpTools) {
+          allTools[mcpTool.name] = {
+            description: mcpTool.description,
+            parameters: mcpTool.inputSchema,
+          };
         }
+      }
+      const resolvedModel = resolveChatModel(model);
+      const previousMessages = Array.isArray(session.messages)
+        ? (session.messages as unknown as agenticcoderUIMessage[])
+        : [];
+      const mergedMessages = [...previousMessages];
+      
+      for (const message of messages) {
+        const incomingMessage = {
+          ...message,
+          metadata: { ...message.metadata, mode, model },
+        } satisfies agenticcoderUIMessage;
 
-        const { id, messages, mode, model, projectContext, mcpTools, memories } = c.req.valid("json");
+        const existingMessageIndex = mergedMessages.findIndex((m) => m.id === incomingMessage.id);
 
-        const session = await db.session.findUnique({
-          where: { id, userId },
-        });
-
-        if (!session) {
-          return c.json({ error: "Session not found" }, 404);
+        if (existingMessageIndex === -1) {
+          mergedMessages.push(incomingMessage);
+        } else {
+          mergedMessages[existingMessageIndex] = incomingMessage;
         }
+      }
 
-        const startTime = Date.now();
-        const builtInTools = getToolContracts(mode);
+      // Filter out corrupted messages (e.g. empty assistant replies from failed streams)
+      const validMessages = mergedMessages.filter(
+        (m) => m.id && Array.isArray(m.parts) && m.parts.length > 0
+      );
 
-        // Merge MCP tools with built-in tools for the AI
-        const allTools: Record<string, any> = { ...builtInTools };
-        if (mcpTools && mcpTools.length > 0) {
-          for (const mcpTool of mcpTools) {
-            allTools[mcpTool.name] = {
-              description: mcpTool.description,
-              parameters: mcpTool.inputSchema,
-            };
+      // Build system prompt with memories
+      const systemPromptBase = buildSystemPrompt({ mode, hasImages: false });
+      const fullSystemPrompt = systemPromptBase
+        + (memories ? "\n" + memories : "")
+        + (projectContext ? "\n\n" + projectContext : "");
+
+      // Token-aware context window management
+      const systemTokens = estimateTokens(fullSystemPrompt);
+      const projectTokens = projectContext ? estimateTokens(projectContext) : 0;
+      const contextResult = manageContext(
+        validMessages as any[],
+        systemTokens,
+        projectTokens,
+        32768, // Most free models support 32K+ context
+      );
+      const trimmedMessages = contextResult.messages as agenticcoderUIMessage[];
+
+      // Use builtInTools for validation (requires proper types)
+      const nextMessages = await validateUIMessages<agenticcoderUIMessage>({
+        messages: trimmedMessages,
+        tools: builtInTools,
+      });
+      const modelMessages = await convertToModelMessages(nextMessages, { tools: builtInTools });
+      let completedUsage: LanguageModelUsage | null = null;
+
+      console.log(`[chat] session=${id} model=${model} mode=${mode} msgs=${validMessages.length}${contextResult.trimmedCount > 0 ? ` (trimmed ${contextResult.trimmedCount}, ~${contextResult.totalTokens} tokens)` : ''} budget=${contextResult.budget.maxContextTokens}`);
+
+      // Request timeout — abort if AI takes longer than 120s
+      const abortController = new AbortController();
+      const requestTimeout = setTimeout(() => abortController.abort(), 120_000);
+
+      const hasImages = trimmedMessages.some((m) =>
+        m.parts?.some((p: any) => p.type === "file" && p.mediaType?.startsWith("image/"))
+        || (m as any).experimental_attachments?.length > 0
+      );
+
+      const result = streamText({
+        model: resolvedModel.model,
+        system: fullSystemPrompt,
+        messages: modelMessages,
+        tools: allTools,
+        maxSteps: 25,
+        maxTokens: 16384,
+        temperature: 0,
+        toolCallStreaming: true,
+        abortSignal: abortController.signal,
+        providerOptions: {
+          openrouter: {
+            transforms: ["middle-out"],
+          },
+        },
+        onFinish(event) {
+          clearTimeout(requestTimeout);
+          completedUsage = event.totalUsage;
+        },
+      });
+
+      // Convert AI SDK stream response to a Web Response
+      const webResponse = result.toUIMessageStreamResponse<agenticcoderUIMessage>({
+        originalMessages: nextMessages,
+        messageMetadata({ part }) {
+          if (part.type === "start") {
+            return { mode, model };
           }
-        }
-        const resolvedModel = resolveChatModel(model);
-        const previousMessages = Array.isArray(session.messages)
-          ? (session.messages as unknown as agenticcoderUIMessage[])
-          : [];
-        const mergedMessages = [...previousMessages];
-        
-        for (const message of messages) {
-          const incomingMessage = {
-            ...message,
-            metadata: { ...message.metadata, mode, model },
-          } satisfies agenticcoderUIMessage;
 
-          const existingMessageIndex = mergedMessages.findIndex((m) => m.id === incomingMessage.id);
+          if (part.type !== "finish") return undefined;
 
-          if (existingMessageIndex === -1) {
-            mergedMessages.push(incomingMessage);
-          } else {
-            mergedMessages[existingMessageIndex] = incomingMessage;
-          }
-        }
-
-        // Filter out corrupted messages (e.g. empty assistant replies from failed streams)
-        const validMessages = mergedMessages.filter(
-          (m) => m.id && Array.isArray(m.parts) && m.parts.length > 0
-        );
-
-        // Build system prompt with memories
-        const systemPromptBase = buildSystemPrompt({ mode, hasImages: false });
-        const fullSystemPrompt = systemPromptBase
-          + (memories ? "\n" + memories : "")
-          + (projectContext ? "\n\n" + projectContext : "");
-
-        // Token-aware context window management
-        const systemTokens = estimateTokens(fullSystemPrompt);
-        const projectTokens = projectContext ? estimateTokens(projectContext) : 0;
-        const contextResult = manageContext(
-          validMessages as any[],
-          systemTokens,
-          projectTokens,
-          32768, // Most free models support 32K+ context
-        );
-        const trimmedMessages = contextResult.messages as agenticcoderUIMessage[];
-
-        // Use builtInTools for validation (requires proper types)
-        const nextMessages = await validateUIMessages<agenticcoderUIMessage>({
-          messages: trimmedMessages,
-          tools: builtInTools,
-        });
-        const modelMessages = await convertToModelMessages(nextMessages, { tools: builtInTools });
-        let completedUsage: LanguageModelUsage | null = null;
-
-        console.log(`[chat] session=${id} model=${model} mode=${mode} msgs=${validMessages.length}${contextResult.trimmedCount > 0 ? ` (trimmed ${contextResult.trimmedCount}, ~${contextResult.totalTokens} tokens)` : ''} budget=${contextResult.budget.maxContextTokens}`);
-
-        // Request timeout — abort if AI takes longer than 120s
-        const abortController = new AbortController();
-        const requestTimeout = setTimeout(() => abortController.abort(), 120_000);
-
-        const hasImages = trimmedMessages.some((m) =>
-          m.parts?.some((p: any) => p.type === "file" && p.mediaType?.startsWith("image/"))
-          || (m as any).experimental_attachments?.length > 0
-        );
-
-        const result = streamText({
-          model: resolvedModel.model,
-          system: fullSystemPrompt,
-          messages: modelMessages,
-          tools: allTools,
-          maxSteps: 25,
-          maxTokens: 16384,
-          temperature: 0,
-          toolCallStreaming: true,
-          abortSignal: abortController.signal,
-          providerOptions: {
-            openrouter: {
-              transforms: ["middle-out"],
-            },
-          },
-          onFinish(event) {
-            clearTimeout(requestTimeout);
-            completedUsage = event.totalUsage;
-          },
-        });
-
-        return result.toUIMessageStreamResponse<agenticcoderUIMessage>({
-          originalMessages: nextMessages,
-          messageMetadata({ part }) {
-            if (part.type === "start") {
-              return { mode, model };
-            }
-
-            if (part.type !== "finish") return undefined;
-
-            return {
-              mode,
-              model,
-              durationMs: Date.now() - startTime,
-              ...(completedUsage ? { usage: completedUsage } : {}),
-            };
-          },
-          async onFinish(event) {
-            // Save messages on abort too (prevents data loss on Esc)
-            if (event.isAborted) {
-              try {
-                await db.session.update({
-                  where: { id, userId },
-                  data: {
-                    messages: event.messages as unknown as Prisma.InputJsonValue,
-                  },
-                });
-              } catch (e) {
-                console.error("Failed to save aborted session:", e);
-              }
-              return;
-            }
-
-            if (hasPendingToolCalls(event.responseMessage)) return;
-
-            // Save session with retry for transient DB errors
+          return {
+            mode,
+            model,
+            durationMs: Date.now() - startTime,
+            ...(completedUsage ? { usage: completedUsage } : {}),
+          };
+        },
+        async onFinish(event) {
+          // Save messages on abort too (prevents data loss on Esc)
+          if (event.isAborted) {
             try {
               await db.session.update({
                 where: { id, userId },
@@ -258,62 +247,109 @@ const app = new Hono<AuthenticatedEnv>()
                   messages: event.messages as unknown as Prisma.InputJsonValue,
                 },
               });
-            } catch (saveError) {
-              console.error("Session save failed, retrying once:", saveError);
-              try {
-                await db.session.update({
-                  where: { id, userId },
-                  data: {
-                    messages: event.messages as unknown as Prisma.InputJsonValue,
-                  },
-                });
-              } catch (retryError) {
-                console.error("Session save retry also failed:", retryError);
-              }
+            } catch (e) {
+              console.error("Failed to save aborted session:", e);
             }
+            return;
+          }
 
-            if (!completedUsage) return;
+          if (hasPendingToolCalls(event.responseMessage)) return;
 
-            // Skip billing for local models (Ollama)
-            if (resolvedModel.isLocal) return;
-
-            // Skip billing for free models (all pricing is $0)
-            const pricing = findSupportedChatModel(resolvedModel.modelId)?.pricing;
-            if (pricing && pricing.inputUsdPerMillionTokens === 0 && pricing.outputUsdPerMillionTokens === 0) {
-              return;
-            }
-
+          // Save session with retry for transient DB errors
+          try {
+            await db.session.update({
+              where: { id, userId },
+              data: {
+                messages: event.messages as unknown as Prisma.InputJsonValue,
+              },
+            });
+          } catch (saveError) {
+            console.error("Session save failed, retrying once:", saveError);
             try {
-              const billableUsage = calculateCreditsForUsage({
-                provider: resolvedModel.provider,
-                model: resolvedModel.modelId,
-                usage: completedUsage,
+              await db.session.update({
+                where: { id, userId },
+                data: {
+                  messages: event.messages as unknown as Prisma.InputJsonValue,
+                },
               });
-
-              await ingestAiUsage({
-                externalCustomerId: userId,
-                eventId: `chat-message:${event.responseMessage.id}`,
-                credits: billableUsage.credits,
-              });
-            } catch (error) {
-              console.error("Failed to ingest Polar AI usage for chat message", {
-                error,
-                sessionId: id,
-                messageId: event.responseMessage.id,
-                userId,
-              });
+            } catch (retryError) {
+              console.error("Session save retry also failed:", retryError);
             }
-          },
-          onError(error) {
-            return error instanceof Error ? error.message : String(error);
-          },
-        });
-      } catch (error) {
-        console.error("Chat route error:", error);
-        const message = error instanceof Error ? error.message : "Failed to process chat request";
-        return c.json({ error: message }, 500);
-      }
-    },
-  );
+          }
 
-export default app;
+          if (!completedUsage) return;
+
+          // Skip billing for local models (Ollama)
+          if (resolvedModel.isLocal) return;
+
+          // Skip billing for free models (all pricing is $0)
+          const pricing = findSupportedChatModel(resolvedModel.modelId)?.pricing;
+          if (pricing && pricing.inputUsdPerMillionTokens === 0 && pricing.outputUsdPerMillionTokens === 0) {
+            return;
+          }
+
+          try {
+            const billableUsage = calculateCreditsForUsage({
+              provider: resolvedModel.provider,
+              model: resolvedModel.modelId,
+              usage: completedUsage,
+            });
+
+            await ingestAiUsage({
+              externalCustomerId: userId,
+              eventId: `chat-message:${event.responseMessage.id}`,
+              credits: billableUsage.credits,
+            });
+          } catch (error) {
+            console.error("Failed to ingest Polar AI usage for chat message", {
+              error,
+              sessionId: id,
+              messageId: event.responseMessage.id,
+              userId,
+            });
+          }
+        },
+        onError(error) {
+          return error instanceof Error ? error.message : String(error);
+        },
+      });
+
+      // Pipe the Web Response body (ReadableStream) to Express response
+      res.status(webResponse.status);
+      webResponse.headers.forEach((value, key) => {
+        res.setHeader(key, value);
+      });
+
+      if (webResponse.body) {
+        const reader = webResponse.body.getReader();
+        const pump = async () => {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              res.end();
+              break;
+            }
+            res.write(value);
+          }
+        };
+
+        // Handle client disconnect
+        req.on("close", () => {
+          reader.cancel();
+        });
+
+        await pump();
+      } else {
+        res.end();
+      }
+    } catch (error) {
+      console.error("Chat route error:", error);
+      const message = error instanceof Error ? error.message : "Failed to process chat request";
+      if (!res.headersSent) {
+        res.status(500).json({ error: message });
+      }
+    }
+  },
+);
+
+export default router;

@@ -1,18 +1,22 @@
-import { Hono } from "hono";
+import { Router } from "express";
+import type { Request, Response } from "express";
 
-const app = new Hono().get("/callback", (c) => {
-  const code = c.req.query("code");
-  const state = c.req.query("state");
-  const error = c.req.query("error");
+const router = Router();
 
-  const errorDescription = c.req.query("error_description");
+router.get("/callback", (req: Request, res: Response) => {
+  const code = req.query.code as string | undefined;
+  const state = req.query.state as string | undefined;
+  const error = req.query.error as string | undefined;
+  const errorDescription = req.query.error_description as string | undefined;
 
   if (error) {
-    return c.text(errorDescription ?? error, 400);
+    res.status(400).send(errorDescription ?? error);
+    return;
   }
 
   if (!code || !state) {
-    return c.text("Missing authorization code or state", 400);
+    res.status(400).send("Missing authorization code or state");
+    return;
   }
 
   try {
@@ -28,10 +32,10 @@ const app = new Hono().get("/callback", (c) => {
 
     const redirectUrl = `http://localhost:${port}/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
 
-    return c.redirect(redirectUrl);
+    res.redirect(redirectUrl);
   } catch {
-    return c.text("Invalid authentication state", 400);
+    res.status(400).send("Invalid authentication state");
   }
 });
 
-export default app;
+export default router;

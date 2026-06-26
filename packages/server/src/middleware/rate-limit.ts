@@ -1,5 +1,5 @@
-import { createMiddleware } from "hono/factory";
-import type { AuthenticatedEnv } from "./require-auth";
+import type { Request, Response, NextFunction } from "express";
+import type { AuthenticatedRequest } from "./require-auth";
 
 // Simple sliding-window rate limiter per userId
 // No external dependencies — uses in-memory Map
@@ -21,10 +21,10 @@ setInterval(() => {
   }
 }, 5 * 60_000);
 
-export const rateLimit = createMiddleware<AuthenticatedEnv>(async (c, next) => {
-  const userId = c.get("userId");
+export const rateLimit = (req: Request, res: Response, next: NextFunction) => {
+  const userId = (req as AuthenticatedRequest).userId;
   if (!userId) {
-    await next();
+    next();
     return;
   }
 
@@ -40,11 +40,12 @@ export const rateLimit = createMiddleware<AuthenticatedEnv>(async (c, next) => {
 
   if (entry.count > MAX_REQUESTS) {
     const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
-    c.header("Retry-After", String(retryAfter));
-    return c.json({ 
+    res.set("Retry-After", String(retryAfter));
+    res.status(429).json({ 
       error: `Rate limit exceeded. Try again in ${retryAfter}s.` 
-    }, 429);
+    });
+    return;
   }
 
-  await next();
-});
+  next();
+};

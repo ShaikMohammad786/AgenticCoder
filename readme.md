@@ -47,7 +47,7 @@ agenticcoder/
 ├── packages/
 │   ├── shared/        # Types, schemas, model definitions, token counter
 │   ├── database/      # Prisma schema + Neon PostgreSQL client
-│   ├── server/        # Hono API server (auth, chat, billing, context manager)
+│   ├── server/        # Express API server (auth, chat, billing, context manager)
 │   └── cli/           # Terminal UI app (React + @opentui)
 │       └── src/
 │           ├── hooks/       # useChat (streaming, memory, plugins)
@@ -191,7 +191,7 @@ ollama pull codellama:7b
 │                           YOUR MACHINE                              │
 │                                                                     │
 │  ┌─────────────────────┐           ┌───────────────────────────┐   │
-│  │    CLI (Terminal)    │  HTTP     │     Server (Hono API)     │   │
+│  │    CLI (Terminal)    │  HTTP     │    Server (Express API)   │   │
 │  │                     │ ◄──────► │                           │   │
 │  │  React + @opentui   │  Stream   │  /chat   → AI SDK stream │   │
 │  │                     │           │  /auth   → Clerk OAuth   │   │
@@ -245,7 +245,7 @@ ollama pull codellama:7b
 | Runtime | Bun |
 | Language | TypeScript (strict mode) |
 | Monorepo | Bun Workspaces |
-| Server | Hono (lightweight HTTP framework) |
+| Server | Express 5 (HTTP framework) |
 | CLI UI | @opentui/react (terminal React renderer) |
 | Database | Neon PostgreSQL + Prisma ORM |
 | AI | Vercel AI SDK + OpenRouter + Ollama |

@@ -1,22 +1,22 @@
-import { createMiddleware } from "hono/factory";
+import type { Request, Response, NextFunction } from "express";
 import { authenticateOAuthRequest } from "../lib/auth";
 
-export type AuthenticatedEnv = {
-  Variables: {
-    userId: string;
-  };
-};
+// Extend Express Request to include userId
+export interface AuthenticatedRequest extends Request {
+  userId: string;
+}
 
-export const requireAuth = createMiddleware<AuthenticatedEnv>(async (c, next) => {
+export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const auth = await authenticateOAuthRequest(c.req.raw);
+    const auth = await authenticateOAuthRequest(req);
     if (!auth) {
-      return c.json({ error: "Unauthorized. Run /login to continue." }, 401);
+      res.status(401).json({ error: "Unauthorized. Run /login to continue." });
+      return;
     }
 
-    c.set("userId", auth.userId);
-    await next();
+    (req as AuthenticatedRequest).userId = auth.userId;
+    next();
   } catch {
-    return c.json({ error: "Unauthorized. Run /login to continue." }, 401);
+    res.status(401).json({ error: "Unauthorized. Run /login to continue." });
   }
-});
+};

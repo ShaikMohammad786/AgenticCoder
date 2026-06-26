@@ -1,32 +1,40 @@
-import { Hono } from "hono";
-import type { AuthenticatedEnv } from "../middleware/require-auth";
+import { Router } from "express";
+import type { Request, Response } from "express";
+import type { AuthenticatedRequest } from "../middleware/require-auth";
 import { createCheckoutUrl, createCustomerPortalUrl } from "../lib/polar";
 
-const app = new Hono<AuthenticatedEnv>()
-  .post("/checkout", async (c) => {
-    const userId = c.get("userId");
+const router = Router();
 
-    try {
-      const url = await createCheckoutUrl({ customerExternalId: userId, requestUrl: c.req.url });
-      return c.json({ url });
-    } catch (error) {
-      console.error("Polar checkout error:", error);
-      const message = error instanceof Error ? error.message : "Failed to create checkout";
-      return c.json({ error: message }, 500);
-    }
-  })
-  .post("/portal", async (c) => {
-    const userId = c.get("userId");
+router.post("/checkout", async (req: Request, res: Response) => {
+  const userId = (req as AuthenticatedRequest).userId;
 
-    try {
-      const url = await createCustomerPortalUrl({ customerExternalId: userId, requestUrl: c.req.url });
-      return c.json({ url });
-    } catch (error) {
-      console.error("Polar portal error:", error);
-      const message = error instanceof Error ? error.message : "Failed to open portal";
-      return c.json({ error: message }, 500);
-    }
-  })
-  .get("/success", (c) => c.text("Done. You can close this tab and return to AgenticCoder."));
+  try {
+    const fullUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+    const url = await createCheckoutUrl({ customerExternalId: userId, requestUrl: fullUrl });
+    res.json({ url });
+  } catch (error) {
+    console.error("Polar checkout error:", error);
+    const message = error instanceof Error ? error.message : "Failed to create checkout";
+    res.status(500).json({ error: message });
+  }
+});
 
-export default app;
+router.post("/portal", async (req: Request, res: Response) => {
+  const userId = (req as AuthenticatedRequest).userId;
+
+  try {
+    const fullUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+    const url = await createCustomerPortalUrl({ customerExternalId: userId, requestUrl: fullUrl });
+    res.json({ url });
+  } catch (error) {
+    console.error("Polar portal error:", error);
+    const message = error instanceof Error ? error.message : "Failed to open portal";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/success", (_req: Request, res: Response) => {
+  res.send("Done. You can close this tab and return to AgenticCoder.");
+});
+
+export default router;
