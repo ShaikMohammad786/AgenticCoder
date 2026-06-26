@@ -16,8 +16,11 @@ export {
   modeSchema,
   toolInputSchemas,
   getToolContracts,
+  AgentType,
+  agentTypeSchema,
   type ToolContracts,
   type ModeType,
+  type AgentTypeValue,
 } from "./schemas";
 
 export {

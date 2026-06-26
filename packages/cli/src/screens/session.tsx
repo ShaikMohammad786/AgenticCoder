@@ -132,6 +132,20 @@ function SessionChat({
       parts.push(`📊 ${tkn}`);
     }
     if (streamMetrics.estimatedCost > 0.0001) parts.push(`💰 $${streamMetrics.estimatedCost.toFixed(4)}`);
+
+    // SubAgent status indicator
+    try {
+      const { getActiveAgents } = require("../lib/subagent");
+      const active = getActiveAgents();
+      const running = [...active.values()].filter(a => a.status === "running");
+      if (running.length > 0) {
+        const agentTypes = running.map(a => a.type).join(", ");
+        parts.push(`🤖 ${running.length} agent${running.length > 1 ? "s" : ""}: ${agentTypes}`);
+      }
+    } catch {
+      // subagent module not loaded yet — ignore
+    }
+
     return parts.length > 0 ? parts.join("  │  ") : undefined;
   }, [streamMetrics]);
 

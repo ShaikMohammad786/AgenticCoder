@@ -2141,18 +2141,71 @@ type ImageAttachment = {
 | `mcp-client.ts` | cli | MCP protocol client |
 | `checkpoint.ts` | cli | Git checkpoint/undo system |
 | `project-context.ts` | cli | Project context injection |
+| `subagent.ts` | cli | SubAgent orchestrator engine |
+| `agent-prompts.ts` | cli | Specialized system prompts + configs per agent type |
 | `ollama-dialog.tsx` | cli | Ollama model browser UI |
 | `plugins-dialog.tsx` | cli | Plugin viewer UI |
 | `skills-dialog.tsx` | cli | Skills browser UI |
 | `mcp-dialog.tsx` | cli | MCP server browser UI |
 
+---
+
+## 23. SubAgent System
+
+### Overview
+
+The SubAgent system allows the AI to **autonomously spawn specialized child agents** that handle complex, multi-step tasks in parallel. Each subagent gets its own AI conversation with a focused system prompt, constrained tool access, and isolated context window.
+
+### When SubAgents Are Used
+
+SubAgents are activated **only for genuinely complex tasks**:
+
+**✅ DO spawn agents when:**
+- Task spans 3+ files across different components
+- Task has naturally parallelizable sub-tasks (research + implement)
+- Large refactors, migrations, or multi-file features
+- Need parallel code review while implementing
+
+**⚠️ Do NOT spawn agents for:**
+- Simple single-file edits or quick lookups
+- Tasks completable in 1-3 tool calls
+
+### Agent Types
+
+| Type | Tools | Max Steps | Timeout | Purpose |
+|------|-------|-----------|---------|---------|
+| `researcher` | read-only | 15 | 60s | Explore codebase, gather context |
+| `coder` | all build tools | 25 | 120s | Write/edit code, run commands |
+| `reviewer` | read-only + git | 15 | 60s | Code review, find bugs |
+| `planner` | read-only + thinkOut | 10 | 45s | Break down tasks, create plans |
+| `debugger` | all build tools | 20 | 90s | Diagnose and fix bugs |
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `schemas.ts` | `spawnAgent` tool schema, `AgentType` enum |
+| `agent-prompts.ts` | Per-agent system prompts and config |
+| `subagent.ts` | `SubAgentOrchestrator` — lifecycle, parallel execution, JSONL logging |
+| `local-tools.ts` | `spawnAgent` case handler |
+| `chat.ts` | `POST /chat/subagent` — isolated AI conversation endpoint |
+
+### Logging
+
+Subagent conversations are logged to `~/.agenticcoder/subagent-logs/<session-id>/` as JSONL files (like Antigravity/Claude Code).
+
+### Billing
+
+SubAgent API calls are **not billed separately** — bundled into the parent request.
+
 ## Summary
 
-AgenticCoder is a **4-package monorepo** with **18+ features** where:
+AgenticCoder is a **4-package monorepo** with **20+ features** where:
 
 - **`shared`** defines the contract (tool schemas, model definitions, token counter, types)
 - **`database`** stores sessions and messages in Neon PostgreSQL via Prisma
 - **`server`** orchestrates AI conversations with **token-aware context management**, authentication, and billing (Express + AI SDK + Clerk + Polar)
-- **`cli`** renders the terminal UI and executes all 16+ tools locally with **auto-lint self-healing**, **conversation memory (RAG)**, **streaming metrics**, **plugins**, **skills**, **file watching**, **rich diffs**, **MCP protocol**, **checkpoint/undo**, **bash streaming**, **preference persistence**, and **image understanding** (React + @opentui)
+- **`cli`** renders the terminal UI and executes all 17+ tools locally with **subagent orchestration**, **auto-lint self-healing**, **conversation memory (RAG)**, **streaming metrics**, **plugins**, **skills**, **file watching**, **rich diffs**, **MCP protocol**, **checkpoint/undo**, **bash streaming**, **preference persistence**, and **image understanding** (React + @opentui)
 
-The AI never touches your files directly. The server acts as a relay between you and the AI model. Tool calls flow: **Server → CLI → Your Files → Auto-Lint → CLI → Server → AI → repeat (up to 25 steps)**.
+The AI never touches your files directly. The server acts as a relay between you and the AI model. For complex tasks, the AI spawns **specialized subagents** that work in parallel with isolated contexts.
+

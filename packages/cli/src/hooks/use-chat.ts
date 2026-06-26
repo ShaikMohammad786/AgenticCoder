@@ -177,6 +177,7 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     transport,
     async onToolCall({ toolCall }) {
       const mode = chat.messages.at(-1)?.metadata?.mode ?? "BUILD";
+      const model = chat.messages.at(-1)?.metadata?.model ?? "unknown";
       const MAX_RETRIES = 1;
 
       // Clear bash output when a new bash command starts
@@ -190,7 +191,7 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
             toolCall.toolName,
             toolCall.input,
             mode,
-            { onBashOutput },
+            { onBashOutput, sessionId, model },
           );
           chat.addToolOutput({
             tool: toolCall.toolName as keyof ChatTools,

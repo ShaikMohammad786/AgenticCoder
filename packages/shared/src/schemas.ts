@@ -72,7 +72,27 @@ export const toolInputSchemas = {
     startLine: z.number().optional().describe("Start line number"),
     endLine: z.number().optional().describe("End line number"),
   }),
+  spawnAgent: z.object({
+    agents: z.array(z.object({
+      type: z.enum(["researcher", "coder", "reviewer", "planner", "debugger"]).describe("Agent specialization"),
+      task: z.string().describe("Clear, specific task description for the subagent. Be precise about what to do and what to return."),
+      context: z.string().optional().describe("Key context from parent conversation the subagent needs (file paths, decisions made, constraints)"),
+      files: z.array(z.string()).optional().describe("Key files the subagent should focus on"),
+    })).min(1).max(5).describe("Agents to spawn — executed in parallel"),
+    maxConcurrent: z.number().min(1).max(5).default(3).optional().describe("Max agents running at once (default: 3)"),
+  }),
 } as const;
+
+export const AgentType = {
+  RESEARCHER: "researcher",
+  CODER: "coder",
+  REVIEWER: "reviewer",
+  PLANNER: "planner",
+  DEBUGGER: "debugger",
+} as const;
+
+export type AgentTypeValue = (typeof AgentType)[keyof typeof AgentType];
+export const agentTypeSchema = z.enum(["researcher", "coder", "reviewer", "planner", "debugger"]);
 
 export const readOnlyToolContracts = {
   readFile: tool({
@@ -142,6 +162,28 @@ export const buildToolContracts = {
   searchReplace: tool({
     description: "Search and replace text in a file, with optional regex support. Supports multiple occurrences.",
     inputSchema: toolInputSchemas.searchReplace,
+  }),
+  spawnAgent: tool({
+    description: `Spawn specialized subagents to handle complex, multi-step tasks in parallel. Each agent runs in its own isolated context with focused tools.
+
+Agent types:
+- researcher: Read-only codebase exploration. Use for gathering context, finding patterns, understanding architecture.
+- coder: Full write access. Use for implementing features, refactoring code, fixing bugs.
+- reviewer: Read-only code analysis. Use for code review, finding bugs, security audit.
+- planner: Read-only with reasoning. Use for breaking down complex tasks, creating implementation plans.
+- debugger: Full access with focus on diagnostics. Use for reproducing bugs, tracing root causes, applying fixes.
+
+IMPORTANT: Only use this tool when the task genuinely benefits from parallelization or specialization. Do NOT spawn agents for:
+- Simple single-file edits
+- Quick questions or lookups
+- Tasks you can handle in 1-3 tool calls
+
+DO spawn agents when:
+- Task involves 3+ files across different components
+- Task has naturally parallelizable sub-tasks (e.g., research + implement)
+- Task requires both deep analysis AND code changes
+- Task is a large refactor, migration, or multi-file feature`,
+    inputSchema: toolInputSchemas.spawnAgent,
   }),
 } as const;
 

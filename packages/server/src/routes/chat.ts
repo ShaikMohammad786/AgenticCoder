@@ -14,6 +14,7 @@ import type { Prisma } from "@agenticcoder/database";
 import { 
   getToolContracts, 
   modeSchema, 
+  agentTypeSchema,
   type ModeType, 
   type ToolContracts
 } from "@agenticcoder/shared";
@@ -345,6 +346,133 @@ router.post(
     } catch (error) {
       console.error("Chat route error:", error);
       const message = error instanceof Error ? error.message : "Failed to process chat request";
+      if (!res.headersSent) {
+        res.status(500).json({ error: message });
+      }
+    }
+  },
+);
+
+// ─── SubAgent Endpoint ──────────────────────────────────────────────
+// Handles isolated subagent conversations with custom system prompts,
+// constrained tools, and no billing (bundled into parent request).
+
+const subAgentSchema = z.object({
+  sessionId: z.string(),
+  agentId: z.string(),
+  agentType: agentTypeSchema,
+  model: z.string(),
+  mode: modeSchema,
+  systemPrompt: z.string(),
+  userMessage: z.string(),
+  maxSteps: z.number().min(1).max(30).default(15),
+  allowedTools: z.array(z.string()),
+});
+
+router.post(
+  "/subagent",
+  async (req: Request, res: Response) => {
+    try {
+      const userId = (req as AuthenticatedRequest).userId;
+      const parsed = subAgentSchema.safeParse(req.body);
+
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid subagent request body" });
+        return;
+      }
+
+      const {
+        sessionId, agentId, agentType, model, mode,
+        systemPrompt, userMessage, maxSteps, allowedTools,
+      } = parsed.data;
+
+      console.log(`[subagent] session=${sessionId} agent=${agentId} type=${agentType} model=${model} maxSteps=${maxSteps}`);
+
+      const resolvedModel = resolveChatModel(model);
+
+      // Build tool contracts filtered by allowed tools
+      const allTools = getToolContracts(mode);
+      const filteredTools: Record<string, any> = {};
+      for (const [name, contract] of Object.entries(allTools)) {
+        if (allowedTools.includes(name)) {
+          filteredTools[name] = contract;
+        }
+      }
+
+      // Build messages — single user message for the subagent
+      const subAgentMessages: agenticcoderUIMessage[] = [
+        {
+          id: `subagent-${agentId}-msg`,
+          role: "user",
+          parts: [{ type: "text", text: userMessage }],
+        },
+      ];
+
+      const nextMessages = await validateUIMessages<agenticcoderUIMessage>({
+        messages: subAgentMessages,
+        tools: filteredTools as any,
+      });
+      const modelMessages = await convertToModelMessages(nextMessages, { tools: filteredTools as any });
+
+      // Abort after timeout
+      const abortController = new AbortController();
+      const requestTimeout = setTimeout(() => abortController.abort(), 120_000);
+
+      const result = streamText({
+        model: resolvedModel.model,
+        system: systemPrompt,
+        messages: modelMessages,
+        tools: filteredTools,
+        maxSteps,
+        maxTokens: 8192, // Reduced for subagents
+        temperature: 0,
+        toolCallStreaming: true,
+        abortSignal: abortController.signal,
+        onFinish() {
+          clearTimeout(requestTimeout);
+        },
+      });
+
+      // Stream the response back
+      const webResponse = result.toUIMessageStreamResponse<agenticcoderUIMessage>({
+        originalMessages: nextMessages,
+        onError(error) {
+          return error instanceof Error ? error.message : String(error);
+        },
+      });
+
+      // Pipe Web Response to Express
+      res.status(webResponse.status);
+      res.setHeader("X-Agent-Type", agentType);
+      res.setHeader("X-Agent-Id", agentId);
+      webResponse.headers.forEach((value, key) => {
+        res.setHeader(key, value);
+      });
+
+      if (webResponse.body) {
+        const reader = webResponse.body.getReader();
+        const pump = async () => {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              res.end();
+              break;
+            }
+            res.write(value);
+          }
+        };
+
+        req.on("close", () => {
+          reader.cancel();
+        });
+
+        await pump();
+      } else {
+        res.end();
+      }
+    } catch (error) {
+      console.error("SubAgent route error:", error);
+      const message = error instanceof Error ? error.message : "Failed to process subagent request";
       if (!res.headersSent) {
         res.status(500).json({ error: message });
       }

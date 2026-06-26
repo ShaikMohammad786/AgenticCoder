@@ -1,6 +1,6 @@
 # AgenticCoder 🤖
 
-> AI-powered terminal coding assistant with multi-provider support, 16+ tools, plugin system, and intelligent context management.
+> AI-powered terminal coding assistant with multi-provider support, 17+ tools, subagent orchestration, plugin system, and intelligent context management.
 
 ## ✨ Features
 
@@ -12,7 +12,8 @@
 - **Streaming Progress**: Real-time `⚡ 142 tok/s │ ⏱ 3.2s │ 📊 1.2K` in the status bar
 
 ### 🔧 Tools & Extensibility
-- **16 Built-in Tools**: readFile, writeFile, editFile, bash, grep, glob, searchReplace, listDirectory, listCodeDefinitions, gitStatus, gitDiff, gitLog, gitBlame, fetchUrl, thinkOut, fileInfo
+- **17 Built-in Tools**: readFile, writeFile, editFile, bash, grep, glob, searchReplace, listDirectory, listCodeDefinitions, gitStatus, gitDiff, gitLog, gitBlame, fetchUrl, thinkOut, fileInfo, spawnAgent
+- **SubAgent Orchestration**: 5 specialized agent types (researcher, coder, reviewer, planner, debugger) that run in parallel with isolated contexts, configurable concurrency, timeout management, and filesystem-based JSONL conversation logs
 - **Plugin System**: Create custom tools in `.agenticcoder/plugins/` with JSON manifests + shell handlers
 - **Skills System**: 5 built-in + custom reusable prompt templates (code review, add tests, refactor, debug, document)
 - **MCP Protocol**: Connect external tool servers via Model Context Protocol

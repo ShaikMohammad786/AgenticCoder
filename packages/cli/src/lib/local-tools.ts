@@ -7,6 +7,7 @@ import { isPluginTool, getPluginName } from "./plugins";
 import { getFileWatcher } from "./file-watcher";
 import { quickDiff } from "./diff-renderer";
 import { autoLint, formatLintResult } from "./auto-lint";
+import { SubAgentOrchestrator } from "./subagent";
 
 const MAX_FILE_SIZE = 10_000;
 const MAX_RESULTS = 200;
@@ -19,7 +20,7 @@ const IS_WINDOWS = process.platform === "win32";
 const PLAN_TOOLS = [
   "readFile", "listDirectory", "glob", "grep",
   "listCodeDefinitions", "gitStatus", "gitDiff", "gitLog",
-  "fetchUrl", "thinkOut", "fileInfo", "gitBlame",
+  "fetchUrl", "thinkOut", "fileInfo", "gitBlame", "spawnAgent",
 ];
 
 // Block internal/private IP ranges for fetchUrl
@@ -230,6 +231,8 @@ let sessionCheckpointed = false;
 
 export type ToolCallbacks = {
   onBashOutput?: (chunk: string) => void;
+  sessionId?: string;
+  model?: string;
 };
 
 async function ensureCheckpoint() {
@@ -641,6 +644,14 @@ export async function executeLocalTool(
         entries: entries.slice(0, MAX_MATCHES),
         ...(entries.length > MAX_MATCHES ? { truncated: true, totalLines: entries.length } : {}),
       };
+    }
+    case "spawnAgent": {
+      const { agents, maxConcurrent } = toolInputSchemas.spawnAgent.parse(input);
+      const sessionId = callbacks?.sessionId ?? "unknown";
+      const model = callbacks?.model ?? "unknown";
+      const orchestrator = new SubAgentOrchestrator(sessionId, model, mode);
+      const results = await orchestrator.execute(agents, maxConcurrent ?? 3);
+      return orchestrator.formatResults(results);
     }
     default:
       // Route plugin tools
