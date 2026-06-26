@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useDialog } from "../../providers/dialog";
+import { useToast } from "../../providers/toast";
 import { useTheme } from "../../providers/theme";
 import { DialogSearchList } from "../dialog-search-list";
 import {
@@ -60,6 +61,30 @@ const MCP_CATALOG = [
     needsKey: false,
   },
   {
+    id: "docker",
+    label: "Docker",
+    description: "Manage containers and images",
+    command: "npx",
+    args: ["-y", "@docker/mcp-server"],
+    needsKey: false,
+  },
+  {
+    id: "kubernetes",
+    label: "Kubernetes",
+    description: "Manage K8s clusters",
+    command: "npx",
+    args: ["-y", "@strowk/mcp-k8s-go"],
+    needsKey: false,
+  },
+  {
+    id: "aws",
+    label: "AWS",
+    description: "Interact with AWS resources",
+    command: "npx",
+    args: ["-y", "@aws/mcp-server"],
+    needsKey: false,
+  },
+  {
     id: "puppeteer",
     label: "Puppeteer",
     description: "Browser automation + screenshots",
@@ -81,13 +106,16 @@ type McpListItem = {
 
 type McpDialogContentProps = {
   onClose?: () => void;
+  onAskAi?: (query: string) => void;
 };
 
-export const McpDialogContent = ({ onClose }: McpDialogContentProps) => {
+export const McpDialogContent = ({ onClose, onAskAi }: McpDialogContentProps) => {
   const dialog = useDialog();
+  const toast = useToast();
   const { colors } = useTheme();
   const [items, setItems] = useState<McpListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // ESC to close during loading state (DialogSearchList handles its own ESC)
   useKeyboard((key) => {
@@ -183,8 +211,25 @@ export const McpDialogContent = ({ onClose }: McpDialogContentProps) => {
       return;
     }
 
-    if (item.status === "available" && item.catalogEntry) {
-      const catalog = item.catalogEntry;
+    if (item.status === "available") {
+      let catalog = item.catalogEntry;
+      
+      // If it's a custom dynamic item
+      if (item.id === "custom_search" && searchQuery) {
+        catalog = {
+          id: searchQuery.replace(/[^a-zA-Z0-9-]/g, "-"),
+          label: searchQuery,
+          description: "Custom MCP server",
+          command: "npx",
+          args: ["-y", searchQuery],
+          needsKey: false,
+        };
+      }
+
+      if (!catalog) {
+        dialog.close();
+        return;
+      }
 
       // Write to mcp.json
       const root = process.cwd();
@@ -221,12 +266,24 @@ export const McpDialogContent = ({ onClose }: McpDialogContentProps) => {
         } catch {}
       }
 
+      toast.show({
+        variant: "success",
+        message: `Added ${catalog.label} to MCP config. You may need to restart the session.`,
+        duration: 4000
+      });
+
       dialog.close();
       return;
     }
 
+    if (item.id === "ask_ai" && onAskAi && searchQuery) {
+      dialog.close();
+      onAskAi(searchQuery);
+      return;
+    }
+
     dialog.close();
-  }, [dialog]);
+  }, [dialog, searchQuery, toast, onAskAi]);
 
   if (loading) {
     return (
@@ -236,11 +293,40 @@ export const McpDialogContent = ({ onClose }: McpDialogContentProps) => {
     );
   }
 
+  // Dynamically add a "custom install" option if typing
+  const finalItems = [...items];
+  if (
+    searchQuery &&
+    !items.some((i) => i.label.toLowerCase() === searchQuery.toLowerCase())
+  ) {
+    if (onAskAi) {
+      finalItems.push({
+        id: "ask_ai",
+        label: `Ask AI to find: ${searchQuery}`,
+        description: "Let the agent search for the correct official MCP server",
+        status: "available",
+        toolCount: 0,
+        needsKey: false,
+      });
+    }
+
+    finalItems.push({
+      id: "custom_search",
+      label: `Force install: ${searchQuery}`,
+      description: `Run (npx -y ${searchQuery}) without validation`,
+      status: "available",
+      toolCount: 0,
+      needsKey: false,
+    });
+  }
+
   return (
     <DialogSearchList
-      items={items}
+      items={finalItems}
       onSelect={handleSelect}
+      onSearchChange={setSearchQuery}
       filterFn={(item, query) =>
+        item.id === "custom_search" ||
         item.label.toLowerCase().includes(query.toLowerCase()) ||
         item.description.toLowerCase().includes(query.toLowerCase())
       }
@@ -258,7 +344,7 @@ export const McpDialogContent = ({ onClose }: McpDialogContentProps) => {
         );
       }}
       getKey={(item) => item.id}
-      placeholder="Search MCP servers"
+      placeholder="Search or enter npm package name..."
       emptyText="No matching servers"
     />
   );

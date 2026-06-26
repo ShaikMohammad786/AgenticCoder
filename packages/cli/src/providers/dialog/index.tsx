@@ -96,10 +96,13 @@ function Dialog({ currentDialog, close }: DialogProps) {
       onMouseDown={() => close()}
     >
       <box
-        width={Math.min(60, dimensions.width - 4)}
+        width={Math.min(Math.floor(dimensions.width * 0.8), 100)}
         height="auto"
-        backgroundColor="black"
-        paddingX={4}
+        maxHeight={dimensions.height - 4}
+        backgroundColor="#1A1A24"
+        borderColor="#333344"
+        border={["top", "bottom", "left", "right"]}
+        paddingX={3}
         paddingY={1}
         flexDirection="column"
         gap={1}
@@ -113,7 +116,7 @@ function Dialog({ currentDialog, close }: DialogProps) {
         >
           <text attributes={TextAttributes.BOLD}>{title}</text>
           <text attributes={TextAttributes.DIM} onMouseDown={() => close()}>
-            esc
+            esc to close
           </text>
         </box>
         <box flexGrow={1}>{children}</box>

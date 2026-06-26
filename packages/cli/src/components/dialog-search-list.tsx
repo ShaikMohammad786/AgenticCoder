@@ -17,6 +17,7 @@ type DialogSearchListProps<T> = {
   getKey: (item: T) => string;
   placeholder?: string;
   emptyText?: string;
+  onSearchChange?: (query: string) => void;
 };
 
 export function DialogSearchList<T>({
@@ -29,6 +30,7 @@ export function DialogSearchList<T>({
   getKey,
   placeholder = "Search",
   emptyText = "No results",
+  onSearchChange,
 }: DialogSearchListProps<T>) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [searchValue, setSearchValue] = useState("");
@@ -42,6 +44,7 @@ export function DialogSearchList<T>({
     const text = inputRef.current?.value ?? "";
     setSearchValue(text);
     setSelectedIndex(0);
+    onSearchChange?.(text);
 
     const scrollbox = scrollRef.current;
     if (scrollbox) {

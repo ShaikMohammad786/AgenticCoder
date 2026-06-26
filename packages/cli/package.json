@@ -4,8 +4,10 @@
   "type": "module",
   "private": true,
   "scripts": {
-      "dev": "bun run --watch src/index.tsx",
-    "build": "bun build src/index.tsx --outdir dist --target bun"
+    "dev": "bun run --watch src/index.tsx",
+    "build": "bun build src/index.tsx --outdir dist --target bun",
+    "test": "bun test",
+    "test:watch": "bun test --watch"
   },
   "devDependencies": {
     "@agenticcoder/server": "workspace:*",
@@ -24,11 +26,15 @@
     "ai": "^6.0.184",
     "date-fns": "^4.4.0",
     "eventsource-parser": "^3.1.0",
+    "marked": "^18.0.5",
+    "marked-terminal": "^7.3.0",
     "open": "^11.0.0",
     "opentui-spinner": "^0.0.6",
     "pretty-ms": "^9.3.0",
     "react": "^19.2.4",
     "react-router": "^7.14.0",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "0.24.7",
     "zod": "^4.3.6"
   }
 }

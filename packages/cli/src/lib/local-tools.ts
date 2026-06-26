@@ -8,6 +8,7 @@ import { getFileWatcher } from "./file-watcher";
 import { quickDiff } from "./diff-renderer";
 import { autoLint, formatLintResult } from "./auto-lint";
 import { SubAgentOrchestrator } from "./subagent";
+import { searchCodebase } from "./indexer";
 
 const MAX_FILE_SIZE = 10_000;
 const MAX_RESULTS = 200;
@@ -21,6 +22,7 @@ const PLAN_TOOLS = [
   "readFile", "listDirectory", "glob", "grep",
   "listCodeDefinitions", "gitStatus", "gitDiff", "gitLog",
   "fetchUrl", "thinkOut", "fileInfo", "gitBlame", "spawnAgent",
+  "searchCodebase",
 ];
 
 // Block internal/private IP ranges for fetchUrl
@@ -644,6 +646,26 @@ export async function executeLocalTool(
         entries: entries.slice(0, MAX_MATCHES),
         ...(entries.length > MAX_MATCHES ? { truncated: true, totalLines: entries.length } : {}),
       };
+    }
+    case "searchCodebase": {
+      const { query } = toolInputSchemas.searchCodebase.parse(input);
+      try {
+        const results = searchCodebase(query);
+        if (results.length === 0) {
+          return { query, matches: [], message: "No matching symbols found in the codebase index." };
+        }
+        return {
+          query,
+          matches: results.map(r => ({
+            name: r.name,
+            type: r.type,
+            file: r.filePath,
+            definition: r.content,
+          })),
+        };
+      } catch (err) {
+        throw new Error(`Failed to query semantic index. Is the indexer running? ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
     case "spawnAgent": {
       const { agents, maxConcurrent } = toolInputSchemas.spawnAgent.parse(input);

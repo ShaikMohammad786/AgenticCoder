@@ -435,7 +435,7 @@ export class SubAgentOrchestrator {
 
         // Track for UI
         activeAgents.set(agentId, { type: agent.type, status: "running" });
-        console.error(`[subagent] ▶ ${agent.type} agent started: "${agent.task.slice(0, 80)}..."`);
+        console.error(`[subagent] > ${agent.type} agent started: "${agent.task.slice(0, 80)}..."`);
 
         const promise = executeSubAgent(
           agent,
@@ -449,7 +449,7 @@ export class SubAgentOrchestrator {
           results.push(result);
           activeAgents.set(agentId, { type: agent.type, status: result.status });
           
-          const icon = result.status === "completed" ? "✓" : result.status === "timeout" ? "⏱" : "✗";
+          const icon = result.status === "completed" ? "[OK]" : result.status === "timeout" ? "[TIMEOUT]" : "[FAIL]";
           console.error(`[subagent] ${icon} ${agent.type} agent ${result.status} (${Math.round(result.durationMs / 1000)}s, ${result.toolCallCount} tools)`);
         }).catch((error) => {
           clearTimeout(timeoutHandle);
@@ -465,7 +465,7 @@ export class SubAgentOrchestrator {
             toolCallCount: 0,
           });
           activeAgents.set(agentId, { type: agent.type, status: "failed" });
-          console.error(`[subagent] ✗ ${agent.type} agent crashed: ${msg}`);
+          console.error(`[subagent] [FAIL] ${agent.type} agent crashed: ${msg}`);
         }).finally(() => {
           // Remove from running
           const idx = running.indexOf(promise);
@@ -508,7 +508,7 @@ export class SubAgentOrchestrator {
     sections.push(`## SubAgent Results (${results.length} agent${results.length > 1 ? "s" : ""})\n`);
 
     for (const result of results) {
-      const statusIcon = result.status === "completed" ? "✅" : result.status === "timeout" ? "⏱️" : "❌";
+      const statusIcon = result.status === "completed" ? "[OK]" : result.status === "timeout" ? "[TIMEOUT]" : "[FAIL]";
       const duration = (result.durationMs / 1000).toFixed(1);
 
       sections.push(`### ${statusIcon} ${result.type} agent (${duration}s, ${result.toolCallCount} tool calls)`);

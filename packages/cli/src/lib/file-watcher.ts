@@ -1,10 +1,10 @@
 /**
  * File watcher — detects external file changes in the project directory.
- * Tracks AI-written files to distinguish self-changes from external edits.
  */
 
 import { watch, type FSWatcher } from "fs";
 import { relative, join } from "path";
+import { indexFile, indexWorkspace } from "./indexer";
 
 export type FileChangeEvent = {
   files: string[];
@@ -48,6 +48,13 @@ export class FileWatcher {
     this.cwd = cwd;
     this.callback = onChange;
     this._running = true;
+
+    // Run initial bulk index (will skip if already indexed)
+    try {
+      indexWorkspace(cwd);
+    } catch (err) {
+      console.error("[indexer] Failed to perform initial index:", err);
+    }
 
     try {
       this.watcher = watch(cwd, { recursive: true }, (eventType, filename) => {
@@ -101,12 +108,26 @@ export class FileWatcher {
 
   private scheduleFire() {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
+
     this.debounceTimer = setTimeout(() => {
-      if (this.pendingChanges.size > 0 && this.callback) {
-        const files = [...this.pendingChanges];
-        this.pendingChanges.clear();
-        this.callback({ files, timestamp: Date.now() });
+      const files = Array.from(this.pendingChanges);
+      if (files.length > 0 && this.callback) {
+        // Re-index files
+        for (const file of files) {
+          try {
+            indexFile(file, this.cwd);
+          } catch (e) {
+            // Ignore indexer errors
+          }
+        }
+        
+        this.callback({
+          files,
+          timestamp: Date.now(),
+        });
       }
+      this.pendingChanges.clear();
+      this.debounceTimer = null;
     }, DEBOUNCE_MS);
   }
 }

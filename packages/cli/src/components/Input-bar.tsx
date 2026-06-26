@@ -354,9 +354,59 @@ export function InputBar({ onSubmit, disabled = false }: Props) {
     const text = textarea.plainText.trim();
     if (text.length === 0) return;
 
+    // ── Plugin command interception ──
+    if (text.startsWith("/plugin ")) {
+      const parts = text.slice(8).trim().split(/\s+/);
+      const action = parts[0];
+      const arg = parts.slice(1).join(" ");
+
+      if (action && arg) {
+        textarea.setText("");
+        (async () => {
+          try {
+            const registry = await import("../lib/plugin-registry");
+
+            if (action === "install") {
+              toast.show({ message: `Installing plugin: ${arg}...` });
+              const result = await registry.installPlugin(arg);
+              toast.show({
+                variant: result.success ? "success" : "error",
+                message: result.message,
+              });
+            } else if (action === "remove") {
+              toast.show({ message: `Removing plugin: ${arg}...` });
+              const result = await registry.removePlugin(arg);
+              toast.show({
+                variant: result.success ? "success" : "error",
+                message: result.message,
+              });
+            } else if (action === "update") {
+              toast.show({ message: `Updating plugin: ${arg}...` });
+              const result = await registry.updatePlugin(arg);
+              toast.show({
+                variant: result.success ? "success" : "error",
+                message: result.message,
+              });
+            } else {
+              toast.show({
+                variant: "error",
+                message: `Unknown plugin action: ${action}\nUse: install, remove, update`,
+              });
+            }
+          } catch (error) {
+            toast.show({
+              variant: "error",
+              message: error instanceof Error ? error.message : "Plugin command failed",
+            });
+          }
+        })();
+        return;
+      }
+    }
+
     onSubmit(text);
     textarea.setText("");
-  }, [disabled, onSubmit])
+  }, [disabled, onSubmit, toast])
 
   const handleMentionExecute = useCallback((index: number) => {
     const textarea = textareaRef.current;

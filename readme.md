@@ -14,7 +14,7 @@
 ### 🔧 Tools & Extensibility
 - **17 Built-in Tools**: readFile, writeFile, editFile, bash, grep, glob, searchReplace, listDirectory, listCodeDefinitions, gitStatus, gitDiff, gitLog, gitBlame, fetchUrl, thinkOut, fileInfo, spawnAgent
 - **SubAgent Orchestration**: 5 specialized agent types (researcher, coder, reviewer, planner, debugger) that run in parallel with isolated contexts, configurable concurrency, timeout management, and filesystem-based JSONL conversation logs
-- **Plugin System**: Create custom tools in `.agenticcoder/plugins/` with JSON manifests + shell handlers
+- **Plugin System**: Local + external plugins with `/plugin install github:user/repo`, `/plugin install npm:package`, and URL sources. JSON manifests + shell/TypeScript handlers. Install, remove, update from the terminal.
 - **Skills System**: 5 built-in + custom reusable prompt templates (code review, add tests, refactor, debug, document)
 - **MCP Protocol**: Connect external tool servers via Model Context Protocol
 

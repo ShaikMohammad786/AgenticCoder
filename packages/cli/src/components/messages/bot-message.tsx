@@ -108,7 +108,21 @@ export function BotMessage({
               const isPending = part.state !== "output-available" && part.state !== "output-error";
               const isError = part.state === "output-error";
               const isBash = toolName === "bash";
+              const isFileWrite = ["editFile", "writeFile", "searchReplace"].includes(toolName);
               const showLiveOutput = isBash && isPending && isBashStreaming && bashOutput.trim().length > 0;
+
+              // Extract inline diff from tool output
+              let inlineDiff: string | null = null;
+              if (!isPending && !isError && isFileWrite && "output" in part) {
+                try {
+                  const output = typeof part.output === "string" ? JSON.parse(part.output) : part.output;
+                  if (output && typeof output === "object" && "diff" in output) {
+                    inlineDiff = String(output.diff);
+                  }
+                } catch {
+                  // ignore parse errors
+                }
+              }
 
               return (
                 <box key={part.toolCallId} width="100%">
@@ -124,14 +138,37 @@ export function BotMessage({
                   >
                     <text attributes={TextAttributes.DIM}>
                       <em fg={isError ? colors.error : colors.info}>
-                        {isPending ? "⠋ " : isError ? "✗ " : "✓ "}
+                        {isPending ? "▸ " : isError ? "✗ " : "✓ "}
                         {formatToolName(toolName)}:
                       </em>{" "}
                       {formatToolArgs(part)}
-                      {isPending ? " …" : ""}
+                      {isPending ? " ..." : ""}
                       {isError ? ` ${part.errorText}` : ""}
                     </text>
                   </box>
+                  {/* Inline diff for file edits */}
+                  {inlineDiff && (
+                    <box
+                      border={["left"]}
+                      borderColor={colors.thinkingBorder}
+                      customBorderChars={{
+                        ...EmptyBorder,
+                        vertical: "┊",
+                      }}
+                      width="100%"
+                      paddingX={4}
+                    >
+                      <text>
+                        {inlineDiff.split("\n").slice(0, 20).map((line) => {
+                          if (line.startsWith("+")) return `\x1b[32m${line}\x1b[0m`;
+                          if (line.startsWith("-")) return `\x1b[31m${line}\x1b[0m`;
+                          if (line.startsWith("@@") || line.startsWith("---") || line.startsWith("+++")) return `\x1b[36m${line}\x1b[0m`;
+                          return `\x1b[2m${line}\x1b[0m`;
+                        }).join("\n")}
+                        {inlineDiff.split("\n").length > 20 ? `\n\x1b[2m  ... ${inlineDiff.split("\n").length - 20} more lines\x1b[0m` : ""}
+                      </text>
+                    </box>
+                  )}
                   {showLiveOutput && (
                     <box
                       border={["left"]}
@@ -153,9 +190,19 @@ export function BotMessage({
             }
 
             if (part.type === "text") {
+              // Render markdown to ANSI-styled terminal text
+              let displayText = part.text ?? "";
+              try {
+                const { renderMarkdown, hasMarkdownSyntax } = require("../../lib/terminal-markdown");
+                if (hasMarkdownSyntax(displayText)) {
+                  displayText = renderMarkdown(displayText);
+                }
+              } catch {
+                // markdown renderer not available — show raw
+              }
               return (
                 <box key={`text-${j}`} paddingX={3} width="100%">
-                  <text>{part.text}</text>
+                  <text>{displayText}</text>
                 </box>
               );
             }

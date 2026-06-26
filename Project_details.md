@@ -2143,6 +2143,7 @@ type ImageAttachment = {
 | `project-context.ts` | cli | Project context injection |
 | `subagent.ts` | cli | SubAgent orchestrator engine |
 | `agent-prompts.ts` | cli | Specialized system prompts + configs per agent type |
+| `plugin-registry.ts` | cli | External plugin install/remove/update from GitHub, npm, URL |
 | `ollama-dialog.tsx` | cli | Ollama model browser UI |
 | `plugins-dialog.tsx` | cli | Plugin viewer UI |
 | `skills-dialog.tsx` | cli | Skills browser UI |
@@ -2150,7 +2151,55 @@ type ImageAttachment = {
 
 ---
 
-## 23. SubAgent System
+## 23. External Plugin Registry
+
+### Overview
+
+The plugin system now supports **installing, removing, and updating external plugins** from 3 sources:
+
+### Installation Commands
+
+```
+/plugin install github:user/repo          # GitHub repository
+/plugin install npm:package-name          # npm package
+/plugin install https://url.com/file.tgz  # Direct URL (tar.gz/tgz)
+```
+
+### Management Commands
+
+```
+/plugin remove my-plugin    # Delete a plugin
+/plugin update my-plugin    # Re-fetch latest from source
+/plugins                    # View all installed plugins with source info
+```
+
+### How It Works
+
+1. **Install**: Downloads from source → extracts tarball → validates `plugin.json` → saves to `.agenticcoder/plugins/<name>/`
+2. **Source Tracking**: Each installed plugin gets a `.source.json` metadata file so update knows where to fetch from
+3. **Update**: Reads `.source.json` → removes old → re-installs from original source
+4. **Remove**: Deletes the plugin directory entirely
+
+### Safety
+
+| Guard | Value |
+|-------|-------|
+| Validation | `plugin.json` manifest required — invalid archives are rejected and cleaned up |
+| Tarball extraction | Platform-aware (`tar` on Unix, PowerShell `tar` on Windows) |
+| Source tracking | `.source.json` prevents updates on manually-installed plugins |
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `plugin-registry.ts` | Core install/remove/update logic with GitHub, npm, URL support |
+| `plugins-dialog.tsx` | Updated to show source info (github/npm/local/url) |
+| `Input-bar.tsx` | `/plugin install|remove|update` command interception |
+| `Commands.tsx` | Command menu entries for plugin management |
+
+---
+
+## 24. SubAgent System
 
 ### Overview
 

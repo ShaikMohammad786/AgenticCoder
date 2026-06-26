@@ -84,10 +84,18 @@ function Toast({currentToast} : ToastProps){
     const variantColors : Record <ToastVariant, string> = {
         success : "#82E0AA",
         error : "#E74C5E",
-        info  :"cyan"
+        info  :"#89B4FA"
     };
 
-    const borderColor = currentToast.variant ? variantColors[currentToast.variant] : variantColors.info;
+    const variantIcons : Record <ToastVariant, string> = {
+        success : "✓",
+        error : "✗",
+        info  :"ℹ"
+    };
+
+    const variant = currentToast.variant ?? "info";
+    const borderColor = variantColors[variant];
+    const icon = variantIcons[variant];
 
     return (
         <box 
@@ -96,22 +104,21 @@ function Toast({currentToast} : ToastProps){
         alignItems="center"
         top = {2}
         right = {2}
-        width = {Math.max(1,Math.min(60, width -60))}
+        width = {Math.max(30, Math.min(70, width - 20))}
         paddingLeft = {2}
         paddingRight = {2}
         paddingTop = {1}
         paddingBottom = {1}
-        backgroundColor = "#22262E"
+        backgroundColor = "#1A1A24"
         borderColor = {borderColor}
-        border ={["left" ,"right"]}
+        border ={["left", "right", "top", "bottom"]}
         >
-
-            <box flexDirection = "column"  gap = {1}  width = "100%" >
-                <text fg ="white" wrapMode = "word" width ="100%" > {currentToast.message} </text>
-                        
+            <box flexDirection = "column" gap = {1} width = "100%" >
+                <box flexDirection="row" gap={1}>
+                    <text fg={borderColor}>{icon}</text>
+                    <text fg ="white" wrapMode = "word" width ="100%" >{currentToast.message}</text>
+                </box>
             </box>
-
-
         </box>
     )
 }

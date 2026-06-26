@@ -13,6 +13,9 @@ import { useToast } from "../providers/toast";
 import { useChat } from "../hooks/use-chat";
 import { usePromptConfig } from "../providers/prompt-config";
 import type { Message } from "../hooks/use-chat";
+import { ApprovalCard, GoalTracker } from "../components/messages";
+import { useGoalTracker } from "../hooks/use-goal-tracker";
+import { SubAgentOrchestrator } from "../lib/subagent";
 import { apiClient } from "../lib/api-client";
 import { getErrorMessage } from "../lib/http-errors";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
@@ -79,10 +82,11 @@ function SessionChat({
   const { mode, model } = usePromptConfig();
   const { isTopLayer } = useKeyboardLayer();
   const toast = useToast();
-  const { messages, status, submit, abort, interrupt, error, bashOutput, isBashStreaming, streamMetrics } = useChat(
+  const { messages, status, submit, abort, interrupt, error, bashOutput, isBashStreaming, streamMetrics, pendingApproval, approveTool } = useChat(
     session.id,
     initialMessages
   );
+  const { goal, isPlanning, planError, startGoal, updateTaskStatus, abortGoal } = useGoalTracker();
   const hasSubmittedInitialPromptRef = useRef(false);
 
   // Stop the pending reply when the user leaves this session.
@@ -96,9 +100,10 @@ function SessionChat({
     });
     return () => {
       watcher.stop();
+      abortGoal();
       void abort();
     };
-  }, [abort, toast]);
+  }, [abort, abortGoal, toast]);
 
   // Let the user cancel a reply even before the first streamed chunk arrives.
   useKeyboard((key) => {
@@ -111,27 +116,87 @@ function SessionChat({
   useEffect(() => {
     if (!initialPrompt || hasSubmittedInitialPromptRef.current) return;
     hasSubmittedInitialPromptRef.current = true;
-    void submit({
-      userText: initialPrompt.message,
-      mode: initialPrompt.mode,
-      model: initialPrompt.model,
-    });
-  }, [initialPrompt, submit]);
+    
+    // Check if it's a /goal command
+    if (initialPrompt.message.startsWith("/goal ")) {
+      const goalText = initialPrompt.message.slice(6).trim();
+      void startGoal(goalText, initialPrompt.model);
+    } else {
+      void submit({
+        userText: initialPrompt.message,
+        mode: initialPrompt.mode,
+        model: initialPrompt.model,
+      });
+    }
+  }, [initialPrompt, submit, startGoal]);
+
+  // When planning finishes and the goal is NOT complex, fall through to normal chat
+  useEffect(() => {
+    if (!goal || goal.active || isPlanning) return;
+    if (goal.prompt && !goal.isComplex) {
+      void submit({
+        userText: goal.prompt,
+        mode,
+        model,
+      });
+    }
+  }, [goal, isPlanning, submit, mode, model]);
+
+  // Goal Orchestration Loop — runs tasks sequentially via SubAgentOrchestrator
+  useEffect(() => {
+    if (!goal || !goal.active) return;
+    
+    const nextTask = goal.tasks.find(t => t.status === "pending");
+    if (!nextTask) {
+      // All tasks processed
+      const allDone = goal.tasks.every(t => t.status === "done");
+      if (allDone) {
+        toast.show({ message: "All goal tasks completed successfully." });
+      }
+      return;
+    }
+
+    // Mark running
+    updateTaskStatus(nextTask.id, "running");
+
+    // Instantiate the orchestrator properly and execute
+    const orchestrator = new SubAgentOrchestrator(session.id, model, mode);
+    orchestrator.execute([{
+      type: nextTask.role as any, // role is already a valid AgentTypeValue from planner
+      task: nextTask.description,
+      context: goal.prompt,
+    }], 1)
+      .then((results) => {
+        const result = results[0];
+        if (result && result.status === "completed") {
+          updateTaskStatus(nextTask.id, "done");
+          toast.show({ message: `Task completed: ${nextTask.description}` });
+        } else {
+          updateTaskStatus(nextTask.id, "failed");
+          const errMsg = result?.errors?.join("; ") || "Unknown error";
+          toast.show({ variant: "error", message: `Task failed: ${errMsg}` });
+        }
+      })
+      .catch((err) => {
+        updateTaskStatus(nextTask.id, "failed");
+        toast.show({ variant: "error", message: `Error: ${err instanceof Error ? err.message : String(err)}` });
+      });
+  }, [goal, model, mode, session.id, updateTaskStatus, toast]);
 
   // Build streaming status text
   const streamingStatus = useMemo(() => {
     if (!streamMetrics) return undefined;
     const parts: string[] = [];
-    if (streamMetrics.tokensPerSecond > 0) parts.push(`⚡ ${streamMetrics.tokensPerSecond} tok/s`);
+    if (streamMetrics.tokensPerSecond > 0) parts.push(`${streamMetrics.tokensPerSecond} tok/s`);
     const secs = (streamMetrics.elapsedMs / 1000).toFixed(1);
-    parts.push(`⏱ ${secs}s`);
+    parts.push(`${secs}s`);
     if (streamMetrics.tokensGenerated > 0) {
       const tkn = streamMetrics.tokensGenerated >= 1000
         ? `${(streamMetrics.tokensGenerated / 1000).toFixed(1)}K`
         : String(streamMetrics.tokensGenerated);
-      parts.push(`📊 ${tkn}`);
+      parts.push(`${tkn} tokens`);
     }
-    if (streamMetrics.estimatedCost > 0.0001) parts.push(`💰 $${streamMetrics.estimatedCost.toFixed(4)}`);
+    if (streamMetrics.estimatedCost > 0.0001) parts.push(`$${streamMetrics.estimatedCost.toFixed(4)}`);
 
     // SubAgent status indicator
     try {
@@ -140,25 +205,42 @@ function SessionChat({
       const running = [...active.values()].filter(a => a.status === "running");
       if (running.length > 0) {
         const agentTypes = running.map(a => a.type).join(", ");
-        parts.push(`🤖 ${running.length} agent${running.length > 1 ? "s" : ""}: ${agentTypes}`);
+        parts.push(`${running.length} agent${running.length > 1 ? "s" : ""}: ${agentTypes}`);
       }
     } catch {
       // subagent module not loaded yet — ignore
     }
 
-    return parts.length > 0 ? parts.join("  │  ") : undefined;
+    return parts.length > 0 ? parts.join("  ·  ") : undefined;
   }, [streamMetrics]);
 
   return (
     <SessionShell
-      onSubmit={(text) => submit({ userText: text, mode, model })}
-      loading={status === "submitted" || status === "streaming"}
-      interruptible={status === "submitted" || status === "streaming"}
+      onSubmit={(text) => {
+        if (text.startsWith("/goal ")) {
+           void startGoal(text.slice(6).trim(), model);
+        } else {
+           submit({ userText: text, mode, model });
+        }
+      }}
+      loading={status === "submitted" || status === "streaming" || isPlanning}
+      interruptible={status === "submitted" || status === "streaming" || isPlanning}
       streamingStatus={streamingStatus}
     >
+      <GoalTracker goal={goal} isPlanning={isPlanning} planError={planError} />
+
       {messages.map((msg) => (
         <ChatMessage key={msg.id} msg={msg} bashOutput={bashOutput} isBashStreaming={isBashStreaming} />
       ))}
+      
+      {pendingApproval && (
+        <ApprovalCard 
+          toolCall={pendingApproval.toolCall} 
+          onApprove={() => approveTool(true)} 
+          onReject={() => approveTool(false)} 
+        />
+      )}
+
       {error && <ErrorMessage message={error.message} />}
     </SessionShell>
   );

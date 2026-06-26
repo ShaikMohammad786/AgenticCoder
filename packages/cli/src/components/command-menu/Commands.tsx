@@ -9,6 +9,7 @@ import {
   OllamaDialogContent,
   PluginsDialogContent,
   SkillsDialogContent,
+  DiffDialogContent,
 } from "../dialogs";
 import type { Command } from "./types";
 
@@ -209,6 +210,33 @@ export const COMMANDS: Command[] = [
     },
   },
   {
+    name: "plugin install",
+    description: "Install a plugin from GitHub, npm, or URL",
+    value: "/plugin install",
+    action: async (ctx) => {
+      ctx.toast.show({ message: "Usage: type the source after the command\ne.g. /plugin install github:user/repo" });
+      ctx.setInputText?.("/plugin install ");
+    },
+  },
+  {
+    name: "plugin remove",
+    description: "Remove an installed plugin",
+    value: "/plugin remove",
+    action: async (ctx) => {
+      ctx.toast.show({ message: "Usage: type plugin name after the command\ne.g. /plugin remove my-plugin" });
+      ctx.setInputText?.("/plugin remove ");
+    },
+  },
+  {
+    name: "plugin update",
+    description: "Update an installed plugin to latest version",
+    value: "/plugin update",
+    action: async (ctx) => {
+      ctx.toast.show({ message: "Usage: type plugin name after the command\ne.g. /plugin update my-plugin" });
+      ctx.setInputText?.("/plugin update ");
+    },
+  },
+  {
     name: "models",
     description: "Select AI model for generation",
     value: "/models",
@@ -253,7 +281,11 @@ export const COMMANDS: Command[] = [
     action: (ctx) => {
       ctx.dialog.open({
         title: "MCP Servers",
-        children: <McpDialogContent />,
+        children: <McpDialogContent onAskAi={(query) => {
+          if (ctx.setInputText) {
+            ctx.setInputText(`Find and install the official MCP server for '${query}'`);
+          }
+        }} />,
       });
     },
   },
@@ -365,19 +397,11 @@ export const COMMANDS: Command[] = [
     name: "diff",
     description: "Show all changes since session started",
     value: "/diff",
-    action: async (ctx) => {
-      try {
-        const proc = Bun.spawn(["git", "diff", "--stat"], {
-          cwd: process.cwd(),
-          stdout: "pipe",
-          stderr: "pipe",
-        });
-        const output = (await new Response(proc.stdout).text()).trim();
-        await proc.exited;
-        ctx.toast.show({ message: output || "No changes detected" });
-      } catch {
-        ctx.toast.show({ variant: "error", message: "Git diff failed" });
-      }
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "Changes",
+        children: <DiffDialogContent />,
+      });
     },
   },
   {
@@ -433,11 +457,11 @@ export const COMMANDS: Command[] = [
         for (const msg of messages) {
           if (msg.role === "user") {
             const text = msg.parts.filter(p => p.type === "text").map(p => p.text ?? "").join("");
-            lines.push(`## 🧑 User`, "", text, "");
+            lines.push(`## User`, "", text, "");
           } else if (msg.role === "assistant") {
             const mode = msg.metadata?.mode ?? "BUILD";
             const model = msg.metadata?.model ?? "";
-            lines.push(`## 🤖 Assistant (${mode} · ${model})`, "");
+            lines.push(`## Assistant (${mode} · ${model})`, "");
             for (const part of msg.parts) {
               if (part.type === "text" && part.text) {
                 lines.push(part.text, "");

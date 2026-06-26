@@ -72,6 +72,9 @@ export const toolInputSchemas = {
     startLine: z.number().optional().describe("Start line number"),
     endLine: z.number().optional().describe("End line number"),
   }),
+  searchCodebase: z.object({
+    query: z.string().describe("The name of a function, class, or symbol to search for using the AST semantic index."),
+  }),
   spawnAgent: z.object({
     agents: z.array(z.object({
       type: z.enum(["researcher", "coder", "reviewer", "planner", "debugger"]).describe("Agent specialization"),
@@ -142,6 +145,10 @@ export const readOnlyToolContracts = {
   gitBlame: tool({
     description: "Show git blame for a file — who last modified each line, when, and in which commit.",
     inputSchema: toolInputSchemas.gitBlame,
+  }),
+  searchCodebase: tool({
+    description: "Search the codebase for functions, classes, or types using the local AST index (Semantic/RAG search). Returns exact file and line definitions.",
+    inputSchema: toolInputSchemas.searchCodebase,
   }),
 } as const;
 

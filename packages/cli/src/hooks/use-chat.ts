@@ -59,6 +59,16 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
   const [isBashStreaming, setIsBashStreaming] = useState(false);
   const bashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Human approval gate state
+  const [pendingApproval, setPendingApproval] = useState<{
+    toolCall: { toolName: string; toolCallId: string; input: unknown };
+    resolve: () => void;
+    reject: (err: Error) => void;
+  } | null>(null);
+
+  // Tools that require human confirmation before execution
+  const HIGH_IMPACT_TOOLS = ["bash", "writeFile", "editFile", "searchReplace", "spawnAgent"];
+
   const onBashOutput = useCallback((chunk: string) => {
     setIsBashStreaming(true);
     setBashOutput((prev) => {
@@ -187,6 +197,14 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
 
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
+          // Human Approval Gate for high-impact actions
+          if (HIGH_IMPACT_TOOLS.includes(toolCall.toolName)) {
+            await new Promise<void>((resolve, reject) => {
+              setPendingApproval({ toolCall, resolve, reject });
+            });
+            setPendingApproval(null);
+          }
+
           const output = await executeLocalTool(
             toolCall.toolName,
             toolCall.input,
@@ -200,8 +218,9 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
           });
           return;
         } catch (error) {
-          // On last attempt, report the error
-          if (attempt === MAX_RETRIES) {
+          // If user explicitly rejected, don't retry — report immediately
+          const isUserRejection = error instanceof Error && error.message === "User rejected this action.";
+          if (isUserRejection || attempt === MAX_RETRIES) {
             const errorText = error instanceof Error ? error.message : String(error);
             chat.addToolOutput({
               tool: toolCall.toolName as keyof ChatTools,
@@ -209,6 +228,7 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
               state: "output-error",
               errorText,
             });
+            return; // Don't retry if it failed (e.g., user rejected)
           }
           // Otherwise retry silently
         }
@@ -258,6 +278,16 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     bashOutput,
     isBashStreaming,
     streamMetrics,
+    pendingApproval,
+    approveTool: (approved: boolean) => {
+      if (!pendingApproval) return;
+      if (approved) {
+        pendingApproval.resolve();
+      } else {
+        pendingApproval.reject(new Error("User rejected this action."));
+      }
+      setPendingApproval(null);
+    },
     submit: async (params: { userText: string; mode: ModeType; model: SupportedChatModelId | string }) => {
       // Start streaming tracker
       getStreamingTracker().start();
