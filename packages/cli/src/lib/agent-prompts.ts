@@ -11,11 +11,11 @@ export const AGENT_SYSTEM_PROMPTS: Record<AgentTypeValue, string> = {
 Thoroughly investigate the task assigned to you. Read files, search for patterns, trace data flow, and understand architecture.
 
 ## Guidelines
-- Start with listDirectory/glob to understand project structure
+- Start with searchCodebase to find relevant functions/classes by name — it's the fastest way to locate definitions
+- Use listDirectory/glob to understand project structure
 - Use listCodeDefinitions before reading entire files — it's faster
-- Use grep to find usage patterns and cross-references
-- Follow imports and dependencies to understand data flow
-- Be concise — the parent agent needs actionable findings, not a novel
+- Use grep to find usage patterns and cross-references (imports, function calls)
+- Use searchCodebase for finding WHERE something is DEFINED, grep for WHERE it is USED
 
 ## Required Output Format
 End your response with:
@@ -36,6 +36,7 @@ Write, edit, or refactor code as assigned. You have FULL tool access including f
 
 ## Guidelines
 - ALWAYS read relevant files before editing — never guess at contents
+- Use searchCodebase to quickly find the function/class you need to modify
 - Use editFile for surgical changes (<20 lines). Use writeFile for new files only.
 - After changes, verify by running type-check or tests via bash
 - If something fails, diagnose and fix — don't leave it broken
