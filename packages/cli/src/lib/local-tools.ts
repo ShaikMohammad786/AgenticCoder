@@ -7,7 +7,7 @@ import { isPluginTool, getPluginName } from "./plugins";
 import { getFileWatcher } from "./file-watcher";
 import { quickDiff } from "./diff-renderer";
 import { autoLint, formatLintResult } from "./auto-lint";
-import { SubAgentOrchestrator } from "./subagent";
+import { SubAgentOrchestrator, type SubAgentRuntimeContext } from "./subagent";
 import { searchCodebase } from "./indexer";
 
 const MAX_FILE_SIZE = 10_000;
@@ -235,6 +235,7 @@ export type ToolCallbacks = {
   onBashOutput?: (chunk: string) => void;
   sessionId?: string;
   model?: string;
+  runtimeContext?: SubAgentRuntimeContext;
 };
 
 async function ensureCheckpoint() {
@@ -254,7 +255,12 @@ export async function executeLocalTool(
   mode: ModeType,
   callbacks?: ToolCallbacks,
 ) {
-  if (mode === Mode.PLAN && !PLAN_TOOLS.includes(toolName)) {
+  if (
+    mode === Mode.PLAN
+    && !PLAN_TOOLS.includes(toolName)
+    && !isPluginTool(toolName)
+    && !isMcpTool(toolName)
+  ) {
     throw new Error(`Tool ${toolName} is not available in PLAN mode`);
   }
 
@@ -679,7 +685,12 @@ export async function executeLocalTool(
       const { agents, maxConcurrent } = toolInputSchemas.spawnAgent.parse(input);
       const sessionId = callbacks?.sessionId ?? "unknown";
       const model = callbacks?.model ?? "unknown";
-      const orchestrator = new SubAgentOrchestrator(sessionId, model, mode);
+      const orchestrator = new SubAgentOrchestrator(
+        sessionId,
+        model,
+        mode,
+        callbacks?.runtimeContext ?? {},
+      );
       const results = await orchestrator.execute(agents, maxConcurrent ?? 3);
       return orchestrator.formatResults(results);
     }

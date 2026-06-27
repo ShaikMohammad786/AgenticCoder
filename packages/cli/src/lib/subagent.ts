@@ -1,7 +1,7 @@
 import { mkdirSync, appendFileSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import type { AgentTypeValue } from "@agenticcoder/shared";
+import type { AgentTypeValue, ModeType } from "@agenticcoder/shared";
 import { AGENT_SYSTEM_PROMPTS, AGENT_CONFIGS, type AgentConfig } from "./agent-prompts";
 import { apiClient } from "./api-client";
 import { getAuth } from "./auth";
@@ -33,6 +33,32 @@ type SubAgentLogEntry = {
   type: AgentTypeValue;
   event: string;
   data?: unknown;
+};
+
+export type SubAgentExternalTool = {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+};
+
+export type SubAgentRuntimeContext = {
+  projectContext?: string;
+  memories?: string;
+  externalTools?: SubAgentExternalTool[];
+};
+
+type SubAgentMessage = {
+  id: string;
+  role: "user" | "assistant";
+  parts: Array<Record<string, unknown>>;
+  metadata?: Record<string, unknown>;
+};
+
+type SubAgentToolCall = {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  part: Record<string, unknown>;
 };
 
 // ─── Logging (Filesystem-based, like Antigravity/Claude Code) ──────────
@@ -75,13 +101,14 @@ function generateAgentId(type: AgentTypeValue): string {
  */
 async function executeSubAgent(
   request: SubAgentRequest,
+  agentId: string,
   sessionId: string,
   parentModel: string,
   parentMode: string,
+  runtimeContext: SubAgentRuntimeContext,
   logPath: string,
   abortSignal: AbortSignal,
 ): Promise<SubAgentResult> {
-  const agentId = generateAgentId(request.type);
   const config = AGENT_CONFIGS[request.type];
   const startTime = Date.now();
   const filesChanged: string[] = [];
@@ -99,43 +126,81 @@ async function executeSubAgent(
 
   try {
     // Build the subagent's focused system prompt
-    const systemPrompt = buildSubAgentPrompt(request, config);
+    const systemPrompt = buildSubAgentPrompt(request, config, runtimeContext);
 
     // Build the initial user message for the subagent
     const userMessage = buildSubAgentUserMessage(request);
+    const messages: SubAgentMessage[] = [
+      {
+        id: `subagent-${agentId}-user`,
+        role: "user",
+        parts: [{ type: "text", text: userMessage }],
+      },
+    ];
+    const inheritedToolNames = runtimeContext.externalTools?.map((tool) => tool.name) ?? [];
+    const allowedTools = [...new Set([...config.allowedTools, ...inheritedToolNames])];
+    const builtInToolMode: ModeType = config.isReadOnly || parentMode === "PLAN" ? "PLAN" : "BUILD";
+    const inheritedToolMode: ModeType = parentMode === "PLAN" ? "PLAN" : "BUILD";
 
-    // Stream conversation with the AI via the subagent endpoint
-    const response = await fetchSubAgentStream({
-      sessionId,
-      agentId,
-      agentType: request.type,
-      model: parentModel,
-      mode: parentMode,
-      systemPrompt,
-      userMessage,
-      config,
-      abortSignal,
-    });
+    for (let step = 0; step < config.maxSteps; step++) {
+      const response = await fetchSubAgentStream({
+        sessionId,
+        agentId,
+        agentType: request.type,
+        model: parentModel,
+        mode: inheritedToolMode,
+        systemPrompt,
+        userMessage,
+        config,
+        allowedTools,
+        externalTools: runtimeContext.externalTools ?? [],
+        messages,
+        abortSignal,
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "Unknown error");
-      throw new Error(`Subagent API error (${response.status}): ${errorText}`);
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "Unknown error");
+        throw new Error(`Subagent API error (${response.status}): ${errorText}`);
+      }
+
+      const turn = await collectSubAgentTurn(response, agentId, request.type, logPath, abortSignal);
+      if (turn.assistantMessage) {
+        messages.push(turn.assistantMessage);
+      }
+      if (turn.text.trim()) {
+        finalSummary = turn.text.trim();
+      }
+
+      if (turn.toolCalls.length === 0) {
+        break;
+      }
+
+      for (const toolCall of turn.toolCalls) {
+        toolCallCount++;
+
+        const isBuiltIn = config.allowedTools.includes(toolCall.toolName);
+        const output = await executeSubAgentToolCall({
+          toolCall,
+          agentId,
+          agentType: request.type,
+          allowedTools,
+          logPath,
+          mode: isBuiltIn ? builtInToolMode : inheritedToolMode,
+          sessionId,
+          parentModel,
+          filesChanged,
+          errors,
+        });
+
+        if (turn.assistantMessage) {
+          applyToolOutputToMessage(turn.assistantMessage, toolCall, output);
+        }
+      }
+
+      if (step === config.maxSteps - 1) {
+        errors.push(`Reached maximum subagent steps (${config.maxSteps}) before a final answer.`);
+      }
     }
-
-    // Process the streaming response
-    const result = await processSubAgentStream(
-      response,
-      agentId,
-      request.type,
-      config,
-      logPath,
-      abortSignal,
-      filesChanged,
-      errors,
-      (count) => { toolCallCount = count; },
-    );
-
-    finalSummary = result;
 
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -195,18 +260,28 @@ async function executeSubAgent(
 
 // ─── Prompt Builders ──────────────────────────────────────────────────
 
-function buildSubAgentPrompt(request: SubAgentRequest, config: AgentConfig): string {
+function buildSubAgentPrompt(
+  request: SubAgentRequest,
+  config: AgentConfig,
+  runtimeContext: SubAgentRuntimeContext,
+): string {
   const basePrompt = AGENT_SYSTEM_PROMPTS[request.type];
   
   const toolList = config.allowedTools.map(t => `- **${t}**`).join("\n");
+  const externalTools = (runtimeContext.externalTools ?? [])
+    .slice(0, 60)
+    .map((tool) => `- **${tool.name}**${tool.description ? `: ${tool.description}` : ""}`)
+    .join("\n");
 
   const externalToolContext = [
     `## AgenticCoder Runtime Context`,
-    `The parent AgenticCoder session may provide project context that lists installed local plugins, configured MCP servers, local skills, and available env var names.`,
-    `Plugin tools are named \`plugin_<name>\`; MCP tools are named \`mcp_<server>_<tool>\`. Treat those as parent-session capabilities unless they are also listed in your Available Tools below.`,
-    `If your task needs a plugin or MCP tool that is not listed below, explain exactly what the parent agent should run next.`,
+    runtimeContext.projectContext ? runtimeContext.projectContext : `No parent project context was provided.`,
+    runtimeContext.memories ? `\n## Relevant Memory\n${runtimeContext.memories}` : "",
+    externalTools ? `\n## Inherited Plugin/MCP Tools\n${externalTools}` : "",
+    `Plugin tools are named \`plugin_<name>\`; MCP tools are named \`mcp_<server>_<tool>\`. If listed above, you may call them directly.`,
+    `Read-only subagents must avoid external tools with obvious write or destructive side effects.`,
     `Never ask for or print secret values. Refer only to required env var names.`,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
   
   const constraints = [
     `## Constraints`,
@@ -251,6 +326,9 @@ async function fetchSubAgentStream(opts: {
   systemPrompt: string;
   userMessage: string;
   config: AgentConfig;
+  allowedTools?: string[];
+  externalTools?: SubAgentExternalTool[];
+  messages?: SubAgentMessage[];
   abortSignal: AbortSignal;
 }): Promise<Response> {
   const auth = getAuth();
@@ -273,7 +351,9 @@ async function fetchSubAgentStream(opts: {
       systemPrompt: opts.systemPrompt,
       userMessage: opts.userMessage,
       maxSteps: opts.config.maxSteps,
-      allowedTools: opts.config.allowedTools,
+      allowedTools: opts.allowedTools ?? opts.config.allowedTools,
+      externalTools: opts.externalTools ?? [],
+      ...(opts.messages ? { messages: opts.messages } : {}),
     }),
     signal: opts.abortSignal,
   });
@@ -281,7 +361,299 @@ async function fetchSubAgentStream(opts: {
 
 // ─── Stream Processing ──────────────────────────────────────────────
 
-async function processSubAgentStream(
+type SubAgentTurn = {
+  text: string;
+  assistantMessage?: SubAgentMessage;
+  toolCalls: SubAgentToolCall[];
+};
+
+type ToolExecutionOutput =
+  | { ok: true; output: unknown }
+  | { ok: false; errorText: string };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function collectTextDelta(event: Record<string, unknown>): string {
+  return getString(event.text)
+    ?? getString(event.textDelta)
+    ?? getString(event.delta)
+    ?? "";
+}
+
+function getToolCallName(event: Record<string, unknown>, fallback?: string): string | undefined {
+  return getString(event.toolName) ?? getString(event.name) ?? fallback;
+}
+
+function getToolCallId(event: Record<string, unknown>, fallbackName: string): string {
+  return getString(event.toolCallId)
+    ?? getString(event.id)
+    ?? `subagent-tool-${fallbackName}-${Date.now().toString(36)}`;
+}
+
+function getToolCallInput(event: Record<string, unknown>, streamedInput?: string): unknown {
+  if ("input" in event) return event.input;
+  if ("args" in event) return event.args;
+
+  if (streamedInput) {
+    try {
+      return JSON.parse(streamedInput);
+    } catch {
+      return streamedInput;
+    }
+  }
+
+  return {};
+}
+
+function createToolPart(toolCall: SubAgentToolCall): Record<string, unknown> {
+  return {
+    type: `tool-${toolCall.toolName}`,
+    toolCallId: toolCall.toolCallId,
+    state: "input-available",
+    input: toolCall.input,
+  };
+}
+
+function applyToolOutputToMessage(
+  message: SubAgentMessage,
+  toolCall: SubAgentToolCall,
+  result: ToolExecutionOutput,
+): void {
+  message.parts = message.parts.map((part) => {
+    if (part.toolCallId !== toolCall.toolCallId) return part;
+
+    if (result.ok) {
+      return {
+        ...part,
+        state: "output-available",
+        output: result.output,
+      };
+    }
+
+    return {
+      ...part,
+      state: "output-error",
+      errorText: result.errorText,
+    };
+  });
+}
+
+async function collectSubAgentTurn(
+  response: Response,
+  agentId: string,
+  agentType: AgentTypeValue,
+  logPath: string,
+  abortSignal: AbortSignal,
+): Promise<SubAgentTurn> {
+  if (!response.body) {
+    throw new Error("No response body from subagent stream");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const textChunks: string[] = [];
+  const toolCallsById = new Map<string, SubAgentToolCall>();
+  const pendingToolInputs = new Map<string, { toolName?: string; chunks: string[] }>();
+  let messageId = `subagent-${agentId}-assistant-${Date.now().toString(36)}`;
+  let buffer = "";
+
+  const addToolCall = (event: Record<string, unknown>, streamedInput?: string) => {
+    const toolName = getToolCallName(event);
+    if (!toolName) return;
+
+    const toolCallId = getToolCallId(event, toolName);
+    if (toolCallsById.has(toolCallId)) return;
+
+    const toolCall: SubAgentToolCall = {
+      toolCallId,
+      toolName,
+      input: getToolCallInput(event, streamedInput),
+      part: {},
+    };
+    toolCall.part = createToolPart(toolCall);
+    toolCallsById.set(toolCallId, toolCall);
+
+    appendLog(logPath, {
+      timestamp: new Date().toISOString(),
+      agentId,
+      type: agentType,
+      event: "tool-requested",
+      data: { tool: toolName },
+    });
+  };
+
+  try {
+    while (true) {
+      if (abortSignal.aborted) break;
+
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+
+      for (const rawLine of lines) {
+        let line = rawLine.trim();
+        if (!line) continue;
+        if (line.startsWith("data:")) line = line.slice(5).trim();
+        if (!line || line === "[DONE]" || !line.startsWith("{")) continue;
+
+        try {
+          const event = JSON.parse(line) as Record<string, unknown>;
+          const type = getString(event.type);
+
+          if (type === "start" && getString(event.messageId)) {
+            messageId = getString(event.messageId)!;
+            continue;
+          }
+
+          if (type === "text" || type === "text-delta") {
+            textChunks.push(collectTextDelta(event));
+            continue;
+          }
+
+          if (type === "tool-input-start") {
+            const toolName = getToolCallName(event);
+            const toolCallId = getToolCallId(event, toolName ?? "unknown");
+            pendingToolInputs.set(toolCallId, { toolName, chunks: [] });
+            continue;
+          }
+
+          if (type === "tool-input-delta") {
+            const toolCallId = getString(event.toolCallId) ?? getString(event.id);
+            if (!toolCallId) continue;
+
+            const pending = pendingToolInputs.get(toolCallId) ?? { chunks: [] };
+            pending.chunks.push(getString(event.inputTextDelta) ?? getString(event.delta) ?? "");
+            pendingToolInputs.set(toolCallId, pending);
+            continue;
+          }
+
+          if (type === "tool-input-available" || type === "tool-call") {
+            const toolCallId = getString(event.toolCallId) ?? getString(event.id);
+            const pending = toolCallId ? pendingToolInputs.get(toolCallId) : undefined;
+            addToolCall(
+              {
+                ...event,
+                toolName: getToolCallName(event, pending?.toolName),
+              },
+              pending?.chunks.join(""),
+            );
+          }
+        } catch {
+          // Ignore partial or non-JSON stream frames.
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const text = textChunks.join("");
+  const toolCalls = Array.from(toolCallsById.values());
+  const parts: Array<Record<string, unknown>> = [];
+
+  if (text.trim()) {
+    parts.push({ type: "text", text });
+  }
+
+  for (const toolCall of toolCalls) {
+    parts.push(toolCall.part);
+  }
+
+  return {
+    text,
+    toolCalls,
+    assistantMessage: parts.length > 0
+      ? { id: messageId, role: "assistant", parts }
+      : undefined,
+  };
+}
+
+async function executeSubAgentToolCall(opts: {
+  toolCall: SubAgentToolCall;
+  agentId: string;
+  agentType: AgentTypeValue;
+  allowedTools: string[];
+  logPath: string;
+  mode: ModeType;
+  sessionId: string;
+  parentModel: string;
+  filesChanged: string[];
+  errors: string[];
+}): Promise<ToolExecutionOutput> {
+  const {
+    toolCall,
+    agentId,
+    agentType,
+    allowedTools,
+    logPath,
+    mode,
+    sessionId,
+    parentModel,
+    filesChanged,
+    errors,
+  } = opts;
+
+  if (!allowedTools.includes(toolCall.toolName)) {
+    const errorText = `Tool ${toolCall.toolName} is not allowed for ${agentType} subagents.`;
+    errors.push(errorText);
+    appendLog(logPath, {
+      timestamp: new Date().toISOString(),
+      agentId,
+      type: agentType,
+      event: "tool-blocked",
+      data: { tool: toolCall.toolName },
+    });
+    return { ok: false, errorText };
+  }
+
+  try {
+    const output = await executeLocalTool(
+      toolCall.toolName,
+      toolCall.input,
+      mode,
+      { sessionId, model: parentModel },
+    );
+
+    if (["writeFile", "editFile", "searchReplace"].includes(toolCall.toolName) && isRecord(toolCall.input)) {
+      const path = getString(toolCall.input.path);
+      if (path && !filesChanged.includes(path)) {
+        filesChanged.push(path);
+      }
+    }
+
+    appendLog(logPath, {
+      timestamp: new Date().toISOString(),
+      agentId,
+      type: agentType,
+      event: "tool-executed",
+      data: { tool: toolCall.toolName, path: isRecord(toolCall.input) ? toolCall.input.path : undefined },
+    });
+
+    return { ok: true, output };
+  } catch (error) {
+    const errorText = error instanceof Error ? error.message : String(error);
+    errors.push(`Tool ${toolCall.toolName} failed: ${errorText}`);
+    appendLog(logPath, {
+      timestamp: new Date().toISOString(),
+      agentId,
+      type: agentType,
+      event: "tool-error",
+      data: { tool: toolCall.toolName, error: errorText },
+    });
+    return { ok: false, errorText };
+  }
+}
+
+async function legacyProcessSubAgentStream(
   response: Response,
   agentId: string,
   agentType: AgentTypeValue,
@@ -350,7 +722,11 @@ async function processSubAgentStream(
             }
 
             try {
-              const result = await executeLocalTool(toolName, toolInput);
+              const result = await executeLocalTool(
+                toolName,
+                toolInput,
+                config.isReadOnly ? "PLAN" : "BUILD",
+              );
               
               // Track file changes
               if (["writeFile", "editFile", "searchReplace"].includes(toolName)) {
@@ -404,11 +780,18 @@ export class SubAgentOrchestrator {
   private sessionId: string;
   private model: string;
   private mode: string;
+  private runtimeContext: SubAgentRuntimeContext;
 
-  constructor(sessionId: string, model: string, mode: string) {
+  constructor(
+    sessionId: string,
+    model: string,
+    mode: string,
+    runtimeContext: SubAgentRuntimeContext = {},
+  ) {
     this.sessionId = sessionId;
     this.model = model;
     this.mode = mode;
+    this.runtimeContext = runtimeContext;
   }
 
   /**
@@ -432,7 +815,7 @@ export class SubAgentOrchestrator {
       while (queue.length > 0 && running.length < maxConcurrent) {
         const agent = queue.shift()!;
         const config = AGENT_CONFIGS[agent.type];
-        const agentId = `${agent.type}-${Date.now().toString(36)}`;
+        const agentId = generateAgentId(agent.type);
         const logPath = getLogPath(this.sessionId, agentId);
 
         // Set up timeout abort
@@ -447,9 +830,11 @@ export class SubAgentOrchestrator {
 
         const promise = executeSubAgent(
           agent,
+          agentId,
           this.sessionId,
           this.model,
           this.mode,
+          this.runtimeContext,
           logPath,
           abortController.signal,
         ).then((result) => {

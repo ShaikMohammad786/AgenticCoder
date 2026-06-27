@@ -154,6 +154,7 @@ const READ_ONLY_TOOLS = [
   "readFile", "listDirectory", "glob", "grep",
   "listCodeDefinitions", "gitStatus", "gitDiff", "gitLog",
   "fetchUrl", "thinkOut", "fileInfo", "gitBlame",
+  "searchCodebase",
 ];
 
 const BUILD_TOOLS = [

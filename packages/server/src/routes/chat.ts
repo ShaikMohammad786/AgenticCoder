@@ -368,6 +368,12 @@ const subAgentSchema = z.object({
   userMessage: z.string(),
   maxSteps: z.number().min(1).max(30).default(15),
   allowedTools: z.array(z.string()),
+  externalTools: z.array(z.object({
+    name: z.string(),
+    description: z.string().optional(),
+    inputSchema: z.record(z.unknown()).optional(),
+  })).optional(),
+  messages: z.array(messageSchema).optional(),
 });
 
 router.post(
@@ -384,7 +390,7 @@ router.post(
 
       const {
         sessionId, agentId, agentType, model, mode,
-        systemPrompt, userMessage, maxSteps, allowedTools,
+        systemPrompt, userMessage, maxSteps, allowedTools, externalTools, messages,
       } = parsed.data;
 
       console.log(`[subagent] session=${sessionId} agent=${agentId} type=${agentType} model=${model} maxSteps=${maxSteps}`);
@@ -399,15 +405,25 @@ router.post(
           filteredTools[name] = contract;
         }
       }
+      for (const externalTool of externalTools ?? []) {
+        if (allowedTools.includes(externalTool.name)) {
+          filteredTools[externalTool.name] = {
+            description: externalTool.description ?? `[External] ${externalTool.name}`,
+            parameters: externalTool.inputSchema ?? {},
+          };
+        }
+      }
 
       // Build messages — single user message for the subagent
-      const subAgentMessages: agenticcoderUIMessage[] = [
-        {
-          id: `subagent-${agentId}-msg`,
-          role: "user",
-          parts: [{ type: "text", text: userMessage }],
-        },
-      ];
+      const subAgentMessages: agenticcoderUIMessage[] = messages?.length
+        ? messages as agenticcoderUIMessage[]
+        : [
+            {
+              id: `subagent-${agentId}-msg`,
+              role: "user",
+              parts: [{ type: "text", text: userMessage }],
+            },
+          ];
 
       const nextMessages = await validateUIMessages<agenticcoderUIMessage>({
         messages: subAgentMessages,

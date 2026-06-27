@@ -251,7 +251,27 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
             toolCall.toolName,
             toolCall.input,
             mode,
-            { onBashOutput, sessionId, model },
+            {
+              onBashOutput,
+              sessionId,
+              model,
+              runtimeContext: {
+                projectContext: projectContextRef.current ?? undefined,
+                memories: memoriesRef.current || undefined,
+                externalTools: [
+                  ...(mcpToolsRef.current?.map((tool) => ({
+                    name: tool.name,
+                    description: tool.description,
+                    inputSchema: tool.inputSchema,
+                  })) ?? []),
+                  ...pluginsToToolDefinitions(pluginsRef.current).map((tool) => ({
+                    name: tool.name,
+                    description: tool.description,
+                    inputSchema: tool.inputSchema,
+                  })),
+                ],
+              },
+            },
           );
           chat.addToolOutput({
             tool: toolCall.toolName as keyof ChatTools,

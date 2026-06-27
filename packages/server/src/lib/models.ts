@@ -1,5 +1,5 @@
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { createOllama } from "ollama-ai-provider";
+import { createOpenAI } from "@ai-sdk/openai";
 import {
   findSupportedChatModel,
   isOllamaModel,
@@ -12,8 +12,18 @@ const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
-const ollama = createOllama({
-  baseURL: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434/api",
+function getOllamaOpenAIBaseURL(): string {
+  const raw = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+  return raw
+    .replace(/\/+$/, "")
+    .replace(/\/api$/, "")
+    .replace(/\/v1$/, "") + "/v1";
+}
+
+const ollama = createOpenAI({
+  name: "ollama",
+  baseURL: getOllamaOpenAIBaseURL(),
+  apiKey: process.env.OLLAMA_API_KEY ?? "ollama",
 });
 
 export type ResolvedModel = {
@@ -33,7 +43,7 @@ export function resolveChatModel(modelId: string): ResolvedModel {
   if (isOllamaModel(modelId)) {
     const ollamaModelName = modelId.replace(/^ollama:/, "");
     return {
-      model: ollama.chat(ollamaModelName) as unknown as LanguageModel,
+      model: ollama.chat(ollamaModelName),
       provider: "ollama",
       modelId,
       isLocal: true,

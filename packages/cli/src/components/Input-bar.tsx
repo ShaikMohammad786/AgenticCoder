@@ -450,6 +450,7 @@ export function InputBar({ onSubmit, disabled = false }: Props) {
         mode,
         setMode,
         setModel,
+        setInputText: (text) => textarea.setText(text),
         sessionId: params.id,
       });
     } else {

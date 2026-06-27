@@ -18,6 +18,33 @@ import { clearAuth, getAuth } from "../../lib/auth";
 import { undoToLastCheckpoint, createCheckpoint } from "../../lib/checkpoint";
 
 import { openBillingPortal, openUpgradeCheckout } from "../../lib/upgrade";
+import { writeClipboard } from "../../lib/clipboard";
+
+type ExportableMessage = {
+  role: string;
+  parts?: Array<{
+    type?: string;
+    text?: string;
+  }>;
+};
+
+function messageText(message: ExportableMessage): string {
+  return (message.parts ?? [])
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("");
+}
+
+function lastAssistantText(messages: ExportableMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message?.role !== "assistant") continue;
+    const text = messageText(message).trim();
+    if (text) return text;
+  }
+
+  return "";
+}
 
 export const COMMANDS: Command[] = [
   {
@@ -410,10 +437,32 @@ export const COMMANDS: Command[] = [
     value: "/copy",
     action: async (ctx) => {
       try {
-        const clipCmd = process.platform === "win32" ? "clip" : process.platform === "darwin" ? "pbcopy" : "xclip -sel clipboard";
-        ctx.toast.show({ message: "Use Ctrl+Shift+C to copy from terminal" });
-      } catch {
-        ctx.toast.show({ variant: "error", message: "Copy failed" });
+        if (!ctx.sessionId) {
+          ctx.toast.show({ variant: "error", message: "No active session to copy" });
+          return;
+        }
+
+        const { apiClient } = await import("../../lib/api-client");
+        const res = await apiClient.sessions[":id"].$get({ param: { id: ctx.sessionId } });
+        if (!res.ok) {
+          ctx.toast.show({ variant: "error", message: "Failed to fetch session" });
+          return;
+        }
+
+        const session = await res.json() as { messages?: unknown[] };
+        const text = lastAssistantText((session.messages ?? []) as ExportableMessage[]);
+        if (!text) {
+          ctx.toast.show({ message: "No assistant response to copy" });
+          return;
+        }
+
+        await writeClipboard(text);
+        ctx.toast.show({ variant: "success", message: "Copied last AI response" });
+      } catch (error) {
+        ctx.toast.show({
+          variant: "error",
+          message: error instanceof Error ? error.message : "Copy failed",
+        });
       }
     },
   },
