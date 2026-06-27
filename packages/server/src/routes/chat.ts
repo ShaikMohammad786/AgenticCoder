@@ -181,12 +181,13 @@ router.post(
       );
       const trimmedMessages = contextResult.messages as agenticcoderUIMessage[];
 
-      // Use builtInTools for validation (requires proper types)
+      // Validate/convert with the full tool set so dynamic MCP/plugin tool
+      // results are preserved when the client sends the next step.
       const nextMessages = await validateUIMessages<agenticcoderUIMessage>({
         messages: trimmedMessages,
-        tools: builtInTools,
+        tools: allTools,
       });
-      const modelMessages = await convertToModelMessages(nextMessages, { tools: builtInTools });
+      const modelMessages = await convertToModelMessages(nextMessages, { tools: allTools });
       let completedUsage: LanguageModelUsage | null = null;
 
       console.log(`[chat] session=${id} model=${model} mode=${mode} msgs=${validMessages.length}${contextResult.trimmedCount > 0 ? ` (trimmed ${contextResult.trimmedCount}, ~${contextResult.totalTokens} tokens)` : ''} budget=${contextResult.budget.maxContextTokens}`);

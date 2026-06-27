@@ -17,7 +17,7 @@ export function ApprovalCard({
   onApprove: () => void;
   onReject: () => void;
 }) {
-  const { colors, borders } = useTheme();
+  const { colors } = useTheme();
   const [selected, setSelected] = useState<"approve" | "reject">("approve");
 
   useKeyboard((key) => {
@@ -50,7 +50,7 @@ export function ApprovalCard({
 
   return (
     <box
-      borderStyle={borders.style}
+      borderStyle="single"
       borderColor="yellow"
       flexDirection="column"
       paddingX={1}

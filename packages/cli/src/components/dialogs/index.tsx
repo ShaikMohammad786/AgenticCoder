@@ -8,3 +8,4 @@ export { OllamaDialogContent } from "./ollama-dialog";
 export { PluginsDialogContent } from "./plugins-dialog";
 export { SkillsDialogContent } from "./skills-dialog";
 export { DiffDialogContent } from "./diff-dialog";
+export { SecretInputDialogContent } from "./secret-input-dialog";

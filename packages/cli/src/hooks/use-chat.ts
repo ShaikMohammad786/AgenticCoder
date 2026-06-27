@@ -38,18 +38,22 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
   // Cache project context so we only detect once per session
   const projectContextRef = useRef<string | null>(null);
   const projectContextLoadedRef = useRef(false);
+  const projectContextPromiseRef = useRef<Promise<void> | null>(null);
 
   // MCP tools cache
   const mcpToolsRef = useRef<ReturnType<typeof getAllMcpTools> | null>(null);
   const mcpInitializedRef = useRef(false);
+  const mcpPromiseRef = useRef<Promise<void> | null>(null);
 
   // Plugin tools cache
   const pluginsRef = useRef<Plugin[]>([]);
   const pluginsLoadedRef = useRef(false);
+  const pluginsPromiseRef = useRef<Promise<void> | null>(null);
 
   // Memory cache
   const memoriesRef = useRef<string>("");
   const memoriesLoadedRef = useRef(false);
+  const memoriesPromiseRef = useRef<Promise<void> | null>(null);
 
   // Streaming metrics
   const [streamMetrics, setStreamMetrics] = useState<StreamMetrics | null>(null);
@@ -66,8 +70,9 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     reject: (err: Error) => void;
   } | null>(null);
 
-  // Tools that require human confirmation before execution
-  const HIGH_IMPACT_TOOLS = ["bash", "writeFile", "editFile", "searchReplace", "spawnAgent"];
+  // Tools that require human confirmation before execution.
+  // File edits run directly and show inline diffs in the message stream.
+  const HIGH_IMPACT_TOOLS = ["bash", "spawnAgent"];
 
   const onBashOutput = useCallback((chunk: string) => {
     setIsBashStreaming(true);
@@ -80,43 +85,64 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     bashTimeoutRef.current = setTimeout(() => setIsBashStreaming(false), 500);
   }, []);
 
-  useEffect(() => {
-    if (!projectContextLoadedRef.current) {
-      projectContextLoadedRef.current = true;
-      buildProjectContext().then((ctx) => {
+  const ensureProjectContext = useCallback(async () => {
+    if (projectContextLoadedRef.current) return;
+    if (!projectContextPromiseRef.current) {
+      projectContextPromiseRef.current = buildProjectContext().then((ctx) => {
         projectContextRef.current = ctx;
       }).catch((err) => {
         console.error("[context] Failed to load project context:", err instanceof Error ? err.message : String(err));
+      }).finally(() => {
+        projectContextLoadedRef.current = true;
       });
     }
-    // Initialize MCP lazily if config exists (with timeout so it never blocks chat)
-    if (!mcpInitializedRef.current && hasMcpConfig()) {
-      mcpInitializedRef.current = true;
-      Promise.race([
-        initializeMcp(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000)),
-      ]).then(() => {
+    await projectContextPromiseRef.current;
+  }, []);
+
+  const ensureMcp = useCallback(async () => {
+    if (mcpInitializedRef.current) return;
+    if (!mcpPromiseRef.current) {
+      mcpPromiseRef.current = (async () => {
+        if (!hasMcpConfig()) {
+          mcpToolsRef.current = [];
+          return;
+        }
+
+        const result = await initializeMcp();
         mcpToolsRef.current = getAllMcpTools();
-      }).catch((err) => {
+        if (result.errors.length > 0) {
+          console.error("[mcp] Some MCP servers failed:", result.errors.join("; "));
+        }
+      })().catch((err) => {
         console.error("[mcp] Failed to initialize MCP servers:", err instanceof Error ? err.message : String(err));
+      }).finally(() => {
+        mcpInitializedRef.current = true;
       });
     }
-    // Load plugins
-    if (!pluginsLoadedRef.current) {
-      pluginsLoadedRef.current = true;
-      loadPlugins().then((plugins) => {
+    await mcpPromiseRef.current;
+  }, []);
+
+  const ensurePlugins = useCallback(async () => {
+    if (pluginsLoadedRef.current) return;
+    if (!pluginsPromiseRef.current) {
+      pluginsPromiseRef.current = loadPlugins().then((plugins) => {
         pluginsRef.current = plugins;
         if (plugins.length > 0) {
           console.error(`[plugins] Loaded ${plugins.length} plugin(s): ${plugins.map((p) => p.name).join(", ")}`);
         }
       }).catch((err) => {
         console.error("[plugins] Failed to load plugins:", err instanceof Error ? err.message : String(err));
+      }).finally(() => {
+        pluginsLoadedRef.current = true;
       });
     }
-    // Load relevant memories for this session
-    if (!memoriesLoadedRef.current) {
-      memoriesLoadedRef.current = true;
-      retrieveRelevantMemories(
+    await pluginsPromiseRef.current;
+  }, []);
+
+  const ensureMemories = useCallback(async () => {
+    if (memoriesLoadedRef.current) return;
+    if (!memoriesPromiseRef.current) {
+      memoriesPromiseRef.current = retrieveRelevantMemories(
         projectContextRef.current ?? process.cwd(),
         process.cwd(),
       ).then((memories) => {
@@ -126,9 +152,25 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
         }
       }).catch((err) => {
         console.error("[memory] Failed to load memories:", err instanceof Error ? err.message : String(err));
+      }).finally(() => {
+        memoriesLoadedRef.current = true;
       });
     }
+    await memoriesPromiseRef.current;
   }, []);
+
+  const ensureRuntimeContext = useCallback(async () => {
+    await ensureProjectContext();
+    await Promise.all([
+      ensureMcp(),
+      ensurePlugins(),
+      ensureMemories(),
+    ]);
+  }, [ensureProjectContext, ensureMcp, ensurePlugins, ensureMemories]);
+
+  useEffect(() => {
+    void ensureRuntimeContext();
+  }, [ensureRuntimeContext]);
 
   const transport = useMemo(() => {
     return new DefaultChatTransport<Message>({
@@ -291,6 +333,8 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     submit: async (params: { userText: string; mode: ModeType; model: SupportedChatModelId | string }) => {
       // Start streaming tracker
       getStreamingTracker().start();
+
+      await ensureRuntimeContext();
 
       // Extract image mentions (@file.png) and convert to multimodal parts
       const { text, images, warnings } = await extractImageMentions(params.userText);

@@ -22,6 +22,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
+import { getEnvValue } from "./env-file";
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -50,7 +51,8 @@ interface McpConnection {
     resolve: (value: unknown) => void;
     reject: (reason: unknown) => void;
   }>;
-  buffer: string;
+  buffer: Buffer;
+  stderr: string;
 }
 
 interface JsonRpcRequest {
@@ -70,6 +72,9 @@ interface JsonRpcResponse {
 // ─── State ───────────────────────────────────────────────────────
 
 const connections: Map<string, McpConnection> = new Map();
+const REQUEST_TIMEOUT_MS = 30_000;
+const CONNECT_TIMEOUT_MS = 45_000;
+const MAX_STDERR_LENGTH = 8_000;
 
 // ─── Config ──────────────────────────────────────────────────────
 
@@ -104,11 +109,11 @@ function sendRequest(conn: McpConnection, method: string, params?: Record<string
       ...(params ? { params } : {}),
     };
 
-    // Per-request timeout (30s)
+    // Per-request timeout
     const timer = setTimeout(() => {
       conn.pendingRequests.delete(id);
-      reject(new Error(`MCP request timed out after 30s: ${method}`));
-    }, 30_000);
+      reject(new Error(`MCP request timed out after ${REQUEST_TIMEOUT_MS / 1000}s: ${method}${formatStderr(conn)}`));
+    }, REQUEST_TIMEOUT_MS);
 
     const origResolve = resolve;
     const origReject = reject;
@@ -117,39 +122,116 @@ function sendRequest(conn: McpConnection, method: string, params?: Record<string
       reject: (err) => { clearTimeout(timer); origReject(err); },
     });
 
-    const message = JSON.stringify(request) + "\n";
-    conn.process.stdin?.write(message);
+    conn.process.stdin?.write(encodeMessage(request));
   });
 }
 
-function handleStdout(conn: McpConnection, chunk: string) {
-  conn.buffer += chunk;
+function sendNotification(conn: McpConnection, method: string, params?: Record<string, unknown>) {
+  conn.process.stdin?.write(encodeMessage({
+    jsonrpc: "2.0",
+    method,
+    ...(params ? { params } : {}),
+  }));
+}
 
-  // Process complete JSON lines
-  const lines = conn.buffer.split("\n");
-  conn.buffer = lines.pop() ?? ""; // Keep incomplete last line
+function encodeMessage(message: unknown): string {
+  return `${JSON.stringify(message)}\n`;
+}
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
+function handleStdout(conn: McpConnection, chunk: Uint8Array) {
+  conn.buffer = Buffer.concat([conn.buffer, Buffer.from(chunk)]);
 
-    try {
-      const response = JSON.parse(trimmed) as JsonRpcResponse;
-      if (response.id != null) {
-        const pending = conn.pendingRequests.get(response.id);
-        if (pending) {
-          conn.pendingRequests.delete(response.id);
-          if (response.error) {
-            pending.reject(new Error(response.error.message));
-          } else {
-            pending.resolve(response.result);
-          }
-        }
-      }
-    } catch {
-      // Skip malformed JSON
+  while (true) {
+    const bufferTextStart = conn.buffer.subarray(0, Math.min(conn.buffer.length, 64)).toString("utf8");
+    if (/^content-length:/i.test(bufferTextStart)) {
+      if (!handleContentLengthMessage(conn)) return;
+      continue;
     }
+
+    const newlineIndex = conn.buffer.indexOf("\n");
+    if (newlineIndex === -1) return;
+
+    const line = conn.buffer.subarray(0, newlineIndex).toString("utf8").trim();
+    conn.buffer = conn.buffer.subarray(newlineIndex + 1);
+    if (!line) continue;
+
+    handleJsonRpcMessage(conn, line);
   }
+}
+
+function handleContentLengthMessage(conn: McpConnection): boolean {
+  const headerEnd = conn.buffer.indexOf("\r\n\r\n");
+  if (headerEnd === -1) return false;
+
+  const header = conn.buffer.subarray(0, headerEnd).toString("utf8");
+  const contentLengthMatch = header.match(/content-length:\s*(\d+)/i);
+  if (!contentLengthMatch) {
+    conn.buffer = conn.buffer.subarray(headerEnd + 4);
+    return true;
+  }
+
+  const contentLength = Number(contentLengthMatch[1]);
+  if (!Number.isFinite(contentLength)) {
+    conn.buffer = conn.buffer.subarray(headerEnd + 4);
+    return true;
+  }
+
+  const bodyStart = headerEnd + 4;
+  const bodyEnd = bodyStart + contentLength;
+  if (conn.buffer.length < bodyEnd) return false;
+
+  const body = conn.buffer.subarray(bodyStart, bodyEnd).toString("utf8");
+  conn.buffer = conn.buffer.subarray(bodyEnd);
+  handleJsonRpcMessage(conn, body);
+  return true;
+}
+
+function handleJsonRpcMessage(conn: McpConnection, body: string) {
+  try {
+    const response = JSON.parse(body) as JsonRpcResponse;
+    if (response.id == null) return;
+
+    const pending = conn.pendingRequests.get(response.id);
+    if (!pending) return;
+
+    conn.pendingRequests.delete(response.id);
+    if (response.error) {
+      pending.reject(new Error(`${response.error.message}${formatStderr(conn)}`));
+    } else {
+      pending.resolve(response.result);
+    }
+  } catch {
+    // Skip malformed messages.
+  }
+}
+
+function appendStderr(conn: McpConnection, chunk: string) {
+  conn.stderr = `${conn.stderr}${chunk}`.slice(-MAX_STDERR_LENGTH);
+}
+
+function formatStderr(conn: McpConnection) {
+  const stderr = conn.stderr.trim();
+  return stderr ? `\nMCP stderr [${conn.name}]:\n${stderr}` : "";
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => void, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      onTimeout();
+      reject(new Error(`${label} timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 // ─── Connection Management ───────────────────────────────────────
@@ -163,7 +245,7 @@ async function connectToServer(
 ): Promise<McpConnection> {
   const env = {
     ...process.env,
-    ...(config.env ?? {}),
+    ...resolveConfiguredEnv(config.env),
   };
 
   const proc = Bun.spawn([config.command, ...(config.args ?? [])], {
@@ -179,19 +261,35 @@ async function connectToServer(
     tools: [],
     requestId: 0,
     pendingRequests: new Map(),
-    buffer: "",
+    buffer: Buffer.alloc(0),
+    stderr: "",
   };
 
   // Read stdout in background
   (async () => {
     const reader = proc.stdout?.getReader();
     if (!reader) return;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        handleStdout(conn, value);
+      }
+    } catch {
+      // Process ended
+    }
+  })();
+
+  // Read stderr in background so failures are visible in status/errors.
+  (async () => {
+    const reader = proc.stderr?.getReader();
+    if (!reader) return;
     const decoder = new TextDecoder();
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        handleStdout(conn, decoder.decode(value, { stream: true }));
+        appendStderr(conn, decoder.decode(value, { stream: true }));
       }
     } catch {
       // Process ended
@@ -200,31 +298,42 @@ async function connectToServer(
 
   // Initialize the MCP connection
   try {
-    await sendRequest(conn, "initialize", {
+    await withTimeout(sendRequest(conn, "initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
       clientInfo: { name: "agenticcoder", version: "1.0.0" },
-    });
+    }), CONNECT_TIMEOUT_MS, () => proc.kill(), `MCP server "${name}" initialize`);
 
     // Send initialized notification
-    const notification = JSON.stringify({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-    }) + "\n";
-    conn.process.stdin?.write(notification);
+    sendNotification(conn, "notifications/initialized");
 
     // Discover tools
-    const toolsResult = (await sendRequest(conn, "tools/list")) as {
+    const toolsResult = (await withTimeout(
+      sendRequest(conn, "tools/list"),
+      CONNECT_TIMEOUT_MS,
+      () => proc.kill(),
+      `MCP server "${name}" tools/list`,
+    )) as {
       tools: McpToolDefinition[];
     };
     conn.tools = toolsResult?.tools ?? [];
   } catch (error) {
     // If initialization fails, kill the process
     proc.kill();
-    throw error;
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${formatStderr(conn)}`);
   }
 
   return conn;
+}
+
+function resolveConfiguredEnv(env?: Record<string, string>) {
+  if (!env) return {};
+
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    resolved[key] = value || getEnvValue(key) || "";
+  }
+  return resolved;
 }
 
 // ─── Public API ──────────────────────────────────────────────────
@@ -246,23 +355,26 @@ export async function initializeMcp(cwd?: string): Promise<{
   const errors: string[] = [];
   let totalTools = 0;
 
-  for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
+  const entries = Object.entries(config.mcpServers);
+  const results = await Promise.all(entries.map(async ([name, serverConfig]) => {
     if (connections.has(name)) {
       // Already connected
-      totalTools += connections.get(name)!.tools.length;
-      continue;
+      return connections.get(name)!.tools.length;
     }
 
     try {
       const conn = await connectToServer(name, serverConfig);
       connections.set(name, conn);
-      totalTools += conn.tools.length;
+      return conn.tools.length;
     } catch (error) {
       errors.push(
         `${name}: ${error instanceof Error ? error.message : "Failed to connect"}`
       );
+      return 0;
     }
-  }
+  }));
+
+  totalTools = results.reduce((sum, count) => sum + count, 0);
 
   return { servers: connections.size, tools: totalTools, errors };
 }
@@ -341,12 +453,14 @@ export function getMcpStatus(): {
   connected: boolean;
   toolCount: number;
   tools: string[];
+  stderr?: string;
 }[] {
   const status: {
     name: string;
     connected: boolean;
     toolCount: number;
     tools: string[];
+    stderr?: string;
   }[] = [];
 
   for (const [name, conn] of connections) {
@@ -355,6 +469,7 @@ export function getMcpStatus(): {
       connected: !conn.process.killed,
       toolCount: conn.tools.length,
       tools: conn.tools.map((t) => t.name),
+      ...(conn.stderr.trim() ? { stderr: conn.stderr.trim() } : {}),
     });
   }
 

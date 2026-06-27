@@ -1,0 +1,35 @@
+{
+  "name": "http_request",
+  "description": "Call public HTTP APIs with method, headers, and optional body. Blocks localhost and private network targets.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "Public http or https URL"
+      },
+      "method": {
+        "type": "string",
+        "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"],
+        "description": "HTTP method",
+        "default": "GET"
+      },
+      "headers": {
+        "type": "object",
+        "description": "HTTP headers as key-value pairs",
+        "additionalProperties": { "type": "string" }
+      },
+      "body": {
+        "type": "string",
+        "description": "Request body for POST, PUT, or PATCH"
+      },
+      "maxBytes": {
+        "type": "number",
+        "description": "Maximum response body size to print",
+        "default": 20000
+      }
+    },
+    "required": ["url"]
+  },
+  "handler": "handler.ts"
+}

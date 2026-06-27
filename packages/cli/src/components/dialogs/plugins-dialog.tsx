@@ -4,14 +4,37 @@ import { useDialog } from "../../providers/dialog";
 import { useToast } from "../../providers/toast";
 import { useTheme } from "../../providers/theme";
 import { DialogSearchList } from "../dialog-search-list";
+import { SecretInputDialogContent } from "./secret-input-dialog";
+import { missingEnvVars, setProjectEnvValue } from "../../lib/env-file";
 import { loadPlugins, type Plugin } from "../../lib/plugins";
-import { listInstalledPlugins, removePlugin, updatePlugin, type InstalledPlugin } from "../../lib/plugin-registry";
+import { installPlugin, listInstalledPlugins } from "../../lib/plugin-registry";
+import { installCatalogPlugin, PLUGIN_CATALOG, type PluginCatalogEntry } from "../../lib/plugin-catalog";
 
-type PluginItem = Plugin & {
+type InstalledPluginItem = Plugin & {
+  kind: "installed";
   displayName: string;
   sourceLabel: string;
   hasSource: boolean;
 };
+
+type AvailablePluginItem = PluginCatalogEntry & {
+  kind: "available";
+  displayName: string;
+  sourceLabel: string;
+  handlerType: "typescript";
+};
+
+type ExternalPluginItem = {
+  kind: "external";
+  name: string;
+  displayName: string;
+  description: string;
+  sourceLabel: string;
+  handlerType: "typescript";
+  source: string;
+};
+
+type PluginItem = InstalledPluginItem | AvailablePluginItem | ExternalPluginItem;
 
 export const PluginsDialogContent = () => {
   const dialog = useDialog();
@@ -19,6 +42,7 @@ export const PluginsDialogContent = () => {
   const { colors } = useTheme();
   const [items, setItems] = useState<PluginItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     let ignore = false;
@@ -34,7 +58,8 @@ export const PluginsDialogContent = () => {
       // Merge: match by name for source info
       const installedMap = new Map(installed.map(p => [p.name, p]));
 
-      setItems(
+      const installedNames = new Set(plugins.map((p) => p.name));
+      const installedItems: InstalledPluginItem[] =
         plugins.map((p) => {
           const meta = installedMap.get(p.name);
           let sourceLabel = "local";
@@ -53,12 +78,24 @@ export const PluginsDialogContent = () => {
 
           return {
             ...p,
+            kind: "installed" as const,
             displayName: p.name,
             sourceLabel,
             hasSource,
           };
-        })
-      );
+        });
+
+      const catalogItems: AvailablePluginItem[] = PLUGIN_CATALOG
+        .filter((entry) => !installedNames.has(entry.name))
+        .map((entry) => ({
+          ...entry,
+          kind: "available" as const,
+          displayName: entry.name,
+          sourceLabel: "built-in catalog",
+          handlerType: "typescript" as const,
+        }));
+
+      setItems([...installedItems, ...catalogItems]);
       setLoading(false);
     })();
     return () => { ignore = true; };
@@ -66,13 +103,61 @@ export const PluginsDialogContent = () => {
 
   const handleSelect = useCallback(
     async (item: PluginItem) => {
-      dialog.close();
+      if (item.kind === "external") {
+        const result = await installPlugin(item.source);
+        toast.show({
+          variant: result.success ? "success" : "error",
+          message: result.message,
+          duration: 4000,
+        });
+        dialog.close();
+        return;
+      }
+
+      if (item.kind === "available") {
+        const result = installCatalogPlugin(item);
+        toast.show({
+          variant: result.success ? "success" : "error",
+          message: result.message,
+          duration: 4000,
+        });
+        dialog.close();
+        return;
+      }
+
+      const requiredEnv = Object.keys(item.env ?? {});
+      const missing = missingEnvVars(requiredEnv);
+
+      if (missing.length > 0) {
+        const envName = missing[0]!;
+        dialog.open({
+          title: `${item.name} Setup`,
+          children: (
+            <SecretInputDialogContent
+              label={`Enter ${envName}`}
+              envName={envName}
+              description={`This value will be saved in .env and used by the ${item.name} plugin.`}
+              placeholder={envName}
+              onSubmit={(value) => {
+                setProjectEnvValue(envName, value);
+                toast.show({
+                  variant: "success",
+                  message: `Saved ${envName} for ${item.name}.`,
+                });
+                dialog.close();
+              }}
+            />
+          ),
+        });
+        return;
+      }
 
       const actions: string[] = [`Plugin: ${item.name}`, `Type: ${item.handlerType}`, `Source: ${item.sourceLabel}`, item.description];
 
       toast.show({
         message: actions.join("\n"),
       });
+      dialog.close();
     },
     [dialog, toast],
   );
@@ -85,39 +170,38 @@ export const PluginsDialogContent = () => {
     );
   }
 
-  if (items.length === 0) {
-    return (
-      <box paddingX={2} paddingY={1} flexDirection="column" gap={1}>
-        <text fg="yellow">No plugins found</text>
-        <text attributes={TextAttributes.DIM}>
-          Install a plugin:{"\n"}
-          /plugin install github:user/repo{"\n"}
-          /plugin install npm:package-name{"\n"}
-          {"\n"}
-          Or create one manually:{"\n"}
-          .agenticcoder/plugins/my-tool/plugin.json{"\n"}
-          .agenticcoder/plugins/my-tool/handler.sh
-        </text>
-      </box>
-    );
+  const finalItems = [...items];
+  const trimmedQuery = searchQuery.trim();
+  if (/^(npm:|github:|https?:\/\/)/.test(trimmedQuery)) {
+    finalItems.push({
+      kind: "external",
+      name: `install-${trimmedQuery}`,
+      displayName: `Install ${trimmedQuery}`,
+      description: "Install external AgenticCoder plugin source",
+      sourceLabel: trimmedQuery,
+      handlerType: "typescript",
+      source: trimmedQuery,
+    });
   }
 
   return (
     <DialogSearchList
-      items={items}
+      items={finalItems}
       onSelect={handleSelect}
+      onSearchChange={setSearchQuery}
       filterFn={(item, query) =>
+        item.kind === "external" ||
         item.name.toLowerCase().includes(query.toLowerCase()) ||
         item.description.toLowerCase().includes(query.toLowerCase()) ||
         item.sourceLabel.toLowerCase().includes(query.toLowerCase())
       }
       renderItem={(item, isSelected) => (
         <text selectable={false} fg={isSelected ? "black" : "white"}>
-          {"  " + item.name.padEnd(18) + `[${item.handlerType}]`.padEnd(14) + `(${item.sourceLabel})`.padEnd(28) + item.description}
+          {"  " + (item.kind === "installed" ? "● " : "+ ") + item.name.padEnd(18) + `[${item.handlerType}]`.padEnd(14) + `(${item.sourceLabel})`.padEnd(28) + item.description}
         </text>
       )}
       getKey={(item) => item.name}
-      placeholder="Search plugins (name, source)"
+      placeholder="Search plugins, or use npm:pkg / github:owner/repo"
       emptyText="No matching plugins"
     />
   );

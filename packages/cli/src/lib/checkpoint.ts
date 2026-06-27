@@ -45,14 +45,6 @@ export async function createCheckpoint(): Promise<string | null> {
       return null; // Nothing to checkpoint
     }
 
-    // Stage all changes
-    const addProc = Bun.spawn(["git", "add", "-A"], {
-      cwd: process.cwd(),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    await addProc.exited;
-
     // Create stash with a tagged name
     const checkpointId = `${CHECKPOINT_PREFIX}${Date.now()}`;
     const stashProc = Bun.spawn(
@@ -70,14 +62,26 @@ export async function createCheckpoint(): Promise<string | null> {
       return null;
     }
 
-    // Immediately pop the stash so the working tree is unchanged
-    // but the stash ref remains in the reflog
-    const popProc = Bun.spawn(["git", "stash", "pop"], {
+    // Immediately apply the stash back so the working tree is unchanged.
+    // Use apply instead of pop so the checkpoint remains available.
+    const applyProc = Bun.spawn(["git", "stash", "apply", "--index", "stash@{0}"], {
       cwd: process.cwd(),
       stdout: "pipe",
       stderr: "pipe",
     });
-    await popProc.exited;
+    const applyCode = await applyProc.exited;
+
+    if (applyCode !== 0) {
+      const fallbackApplyProc = Bun.spawn(["git", "stash", "apply", "stash@{0}"], {
+        cwd: process.cwd(),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const fallbackApplyCode = await fallbackApplyProc.exited;
+      if (fallbackApplyCode !== 0) {
+        return null;
+      }
+    }
 
     return checkpointId;
   } catch {

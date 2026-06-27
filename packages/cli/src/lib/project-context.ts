@@ -26,6 +26,12 @@ type ProjectContext = {
     devDependencies?: Record<string, string>;
   } | null;
   detectedFramework: string | null;
+  agenticCoder: {
+    plugins: { name: string; description: string; handler?: string; envVars: string[] }[];
+    mcpServers: { name: string; command?: string; envVars: string[] }[];
+    skills: string[];
+    envKeys: string[];
+  };
 };
 
 // ── Framework detection ────────────────────────────────────────────────────
@@ -101,8 +107,81 @@ function gatherProjectContext(cwd?: string): ProjectContext {
     ...(packageJson?.devDependencies ?? {}),
   };
   const detectedFramework = detectFramework(allDeps);
+  const agenticCoder = gatherAgenticCoderContext(root, agenticDir);
 
-  return { agentMd, contextFiles, packageJson, detectedFramework };
+  return { agentMd, contextFiles, packageJson, detectedFramework, agenticCoder };
+}
+
+function gatherAgenticCoderContext(root: string, agenticDir: string): ProjectContext["agenticCoder"] {
+  const plugins: ProjectContext["agenticCoder"]["plugins"] = [];
+  const pluginsDir = join(agenticDir, "plugins");
+  if (existsSync(pluginsDir)) {
+    try {
+      const entries = readdirSync(pluginsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const manifestPath = join(pluginsDir, entry.name, "plugin.json");
+        if (!existsSync(manifestPath)) continue;
+        try {
+          const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+            name?: string;
+            description?: string;
+            handler?: string;
+            env?: Record<string, string>;
+          };
+          plugins.push({
+            name: manifest.name || entry.name,
+            description: manifest.description || "No description",
+            handler: manifest.handler,
+            envVars: Object.keys(manifest.env ?? {}),
+          });
+        } catch {}
+      }
+    } catch {}
+  }
+
+  const mcpServers: ProjectContext["agenticCoder"]["mcpServers"] = [];
+  const mcpConfigPath = join(agenticDir, "mcp.json");
+  if (existsSync(mcpConfigPath)) {
+    try {
+      const config = JSON.parse(readFileSync(mcpConfigPath, "utf8")) as {
+        mcpServers?: Record<string, { command?: string; env?: Record<string, string> }>;
+      };
+      for (const [name, server] of Object.entries(config.mcpServers ?? {})) {
+        mcpServers.push({
+          name,
+          command: server.command,
+          envVars: Object.keys(server.env ?? {}),
+        });
+      }
+    } catch {}
+  }
+
+  const skills: string[] = [];
+  const skillsDir = join(agenticDir, "skills");
+  if (existsSync(skillsDir)) {
+    try {
+      for (const file of readdirSync(skillsDir)) {
+        if (file.endsWith(".md")) skills.push(file);
+      }
+    } catch {}
+  }
+
+  const envKeys = readEnvKeys(join(root, ".env"));
+  return { plugins, mcpServers, skills, envKeys };
+}
+
+function readEnvKeys(path: string): string[] {
+  if (!existsSync(path)) return [];
+  try {
+    return readFileSync(path, "utf8")
+      .split(/\r?\n/)
+      .map((line) => line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/)?.[1])
+      .filter((key): key is string => Boolean(key))
+      .sort();
+  } catch {
+    return [];
+  }
 }
 
 // ── Format for prompt ──────────────────────────────────────────────────────
@@ -130,6 +209,40 @@ function formatContextForPrompt(ctx: ProjectContext): string {
     if (info.length > 0) {
       parts.push("## Project Info\n\n" + info.join("\n"));
     }
+  }
+
+  const agenticInfo: string[] = [];
+  if (ctx.agenticCoder.plugins.length > 0) {
+    agenticInfo.push("### Installed Plugins");
+    for (const plugin of ctx.agenticCoder.plugins) {
+      const env = plugin.envVars.length > 0 ? ` Requires env: ${plugin.envVars.join(", ")}.` : "";
+      agenticInfo.push(`- \`plugin_${plugin.name}\`: ${plugin.description}${env}`);
+    }
+  }
+
+  if (ctx.agenticCoder.mcpServers.length > 0) {
+    agenticInfo.push("### Configured MCP Servers");
+    for (const server of ctx.agenticCoder.mcpServers) {
+      const env = server.envVars.length > 0 ? ` Requires env: ${server.envVars.join(", ")}.` : "";
+      agenticInfo.push(`- \`${server.name}\`${server.command ? ` via \`${server.command}\`` : ""}.${env}`);
+    }
+  }
+
+  if (ctx.agenticCoder.skills.length > 0) {
+    agenticInfo.push("### Local Skills");
+    for (const skill of ctx.agenticCoder.skills) {
+      agenticInfo.push(`- \`.agenticcoder/skills/${skill}\``);
+    }
+  }
+
+  if (ctx.agenticCoder.envKeys.length > 0) {
+    agenticInfo.push("### Project Environment");
+    agenticInfo.push(`- .env defines these keys: ${ctx.agenticCoder.envKeys.map((key) => `\`${key}\``).join(", ")}.`);
+    agenticInfo.push("- Secret values are intentionally not included in prompt context.");
+  }
+
+  if (agenticInfo.length > 0) {
+    parts.push("## AgenticCoder Capabilities\n\n" + agenticInfo.join("\n"));
   }
 
   return parts.length > 0

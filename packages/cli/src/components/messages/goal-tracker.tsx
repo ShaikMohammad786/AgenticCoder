@@ -10,12 +10,12 @@ export function GoalTracker({
   isPlanning: boolean;
   planError?: string | null;
 }) {
-  const { colors, borders } = useTheme();
+  const { colors } = useTheme();
 
   if (isPlanning) {
     return (
       <box
-        borderStyle={borders.style}
+        borderStyle="single"
         borderColor="blue"
         flexDirection="column"
         paddingX={1}
@@ -30,7 +30,7 @@ export function GoalTracker({
   if (planError) {
     return (
       <box
-        borderStyle={borders.style}
+        borderStyle="single"
         borderColor="red"
         flexDirection="column"
         paddingX={1}
@@ -50,7 +50,7 @@ export function GoalTracker({
 
   return (
     <box
-      borderStyle={borders.style}
+      borderStyle="single"
       borderColor="green"
       flexDirection="column"
       paddingX={1}

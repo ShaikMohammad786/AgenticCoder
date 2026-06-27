@@ -1,12 +1,52 @@
 {
   "mcpServers": {
-    "puppeteer": {
-      "command": "npx",
+    "filesystem": {
+      "command": "cmd",
       "args": [
+        "/c",
+        "npx",
         "-y",
-        "@modelcontextprotocol/server-puppeteer"
+        "@modelcontextprotocol/server-filesystem",
+        "."
+      ]
+    },
+    "memory": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+    "sequential-thinking": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "context7": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@upstash/context7-mcp"
+      ]
+    },
+    "playwright": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@playwright/mcp@latest",
+        "--output-dir",
+        ".agenticcoder/playwright-output"
       ]
     }
-  
   }
 }

@@ -199,6 +199,14 @@ function buildSubAgentPrompt(request: SubAgentRequest, config: AgentConfig): str
   const basePrompt = AGENT_SYSTEM_PROMPTS[request.type];
   
   const toolList = config.allowedTools.map(t => `- **${t}**`).join("\n");
+
+  const externalToolContext = [
+    `## AgenticCoder Runtime Context`,
+    `The parent AgenticCoder session may provide project context that lists installed local plugins, configured MCP servers, local skills, and available env var names.`,
+    `Plugin tools are named \`plugin_<name>\`; MCP tools are named \`mcp_<server>_<tool>\`. Treat those as parent-session capabilities unless they are also listed in your Available Tools below.`,
+    `If your task needs a plugin or MCP tool that is not listed below, explain exactly what the parent agent should run next.`,
+    `Never ask for or print secret values. Refer only to required env var names.`,
+  ].join("\n");
   
   const constraints = [
     `## Constraints`,
@@ -211,7 +219,7 @@ function buildSubAgentPrompt(request: SubAgentRequest, config: AgentConfig): str
     `- Be concise in your responses — the parent agent will read your output.`,
   ].join("\n");
 
-  return `${basePrompt}\n\n## Available Tools\n${toolList}\n\n${constraints}`;
+  return `${basePrompt}\n\n${externalToolContext}\n\n## Available Tools\n${toolList}\n\n${constraints}`;
 }
 
 function buildSubAgentUserMessage(request: SubAgentRequest): string {

@@ -10,7 +10,7 @@
  *   Review the following code for bugs, security issues...
  */
 
-import { readdir, readFile } from "fs/promises";
+import { readdir, readFile, mkdir, writeFile } from "fs/promises";
 import { join, extname } from "path";
 import type { ModeType } from "@agenticcoder/shared";
 
@@ -23,6 +23,75 @@ export type Skill = {
 };
 
 const SKILLS_DIR = ".agenticcoder/skills";
+
+export type SkillCatalogEntry = {
+  name: string;
+  description: string;
+  mode?: ModeType;
+  fileName: string;
+  prompt: string;
+};
+
+export const SKILL_CATALOG: SkillCatalogEntry[] = [
+  {
+    name: "Security Audit",
+    description: "Find auth, injection, secret-handling, SSRF, and data exposure risks",
+    mode: "PLAN" as ModeType,
+    fileName: "security-audit.md",
+    prompt: `Perform a focused security audit of this project. Prioritize exploitable bugs over style issues.
+
+Check authentication and authorization boundaries, input validation, SSRF, command execution, path traversal, secret exposure, dependency risk, unsafe deserialization, database access, and logging of sensitive data.
+
+Return findings ordered by severity with file references, impact, and concrete fixes. If there are no high-confidence issues, say that clearly and list residual risk.`,
+  },
+  {
+    name: "Frontend Polish",
+    description: "Improve UI layout, responsive behavior, states, and accessibility",
+    mode: "BUILD" as ModeType,
+    fileName: "frontend-polish.md",
+    prompt: `Review the current frontend experience and make targeted improvements.
+
+Focus on responsive layout, overflow, loading/empty/error states, keyboard behavior, contrast, spacing consistency, and text that may wrap badly. Match the existing design language and keep changes scoped.
+
+After editing, run the relevant build or type check.`,
+  },
+  {
+    name: "API Builder",
+    description: "Implement or improve API routes with validation, errors, and tests",
+    mode: "BUILD" as ModeType,
+    fileName: "api-builder.md",
+    prompt: `Implement the requested API work using the project's existing routing, validation, auth, and error-handling patterns.
+
+Read nearby routes first. Add input validation, clear errors, typed responses, and tests or focused verification where the project supports them. Keep behavior backwards-compatible unless asked otherwise.`,
+  },
+  {
+    name: "Performance Pass",
+    description: "Find and fix slow code paths, redundant work, and large payloads",
+    mode: "BUILD" as ModeType,
+    fileName: "performance-pass.md",
+    prompt: `Analyze this project for performance bottlenecks and fix the highest-impact safe items.
+
+Look for repeated expensive work, large renders, N+1 queries, unbounded loops, unnecessary network calls, missing memoization, heavy bundle paths, and oversized payloads. Prefer measured or clearly reasoned changes and verify after editing.`,
+  },
+  {
+    name: "Dependency Upgrade",
+    description: "Upgrade dependencies carefully and fix resulting breakages",
+    mode: "BUILD" as ModeType,
+    fileName: "dependency-upgrade.md",
+    prompt: `Upgrade the requested dependencies carefully.
+
+Inspect package scripts and lockfiles first. Check release notes when needed. Make the minimal dependency changes, update code for breaking changes, and run the relevant install/build/test commands. Report anything that could not be verified.`,
+  },
+  {
+    name: "Bug Repro",
+    description: "Create a minimal reproduction before fixing a bug",
+    mode: "BUILD" as ModeType,
+    fileName: "bug-repro.md",
+    prompt: `Debug this issue by first creating or identifying a minimal reproduction.
+
+State the expected vs actual behavior, trace the relevant code path, reproduce with a test/script/manual command if possible, then fix the root cause. Re-run the reproduction after the fix.`,
+  },
+];
 
 /**
  * Parse a skill markdown file with YAML frontmatter.
@@ -110,6 +179,28 @@ export function hasSkillsDir(cwd: string = process.cwd()): boolean {
   } catch {
     return false;
   }
+}
+
+export async function installCatalogSkill(entry: SkillCatalogEntry, cwd: string = process.cwd()): Promise<Skill> {
+  const skillsPath = join(cwd, SKILLS_DIR);
+  const filePath = join(skillsPath, entry.fileName);
+  const content = `---
+name: ${entry.name}
+description: ${entry.description}
+${entry.mode ? `mode: ${entry.mode}\n` : ""}---
+${entry.prompt.trim()}
+`;
+
+  await mkdir(skillsPath, { recursive: true });
+  await writeFile(filePath, content, "utf8");
+
+  return {
+    name: entry.name,
+    description: entry.description,
+    mode: entry.mode,
+    prompt: entry.prompt.trim(),
+    filePath,
+  };
 }
 
 /**

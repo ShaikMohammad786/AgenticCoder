@@ -1,0 +1,25 @@
+{
+  "name": "npm_package",
+  "description": "Look up npm package metadata, latest version, dependencies, and repository details.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "packageName": {
+        "type": "string",
+        "description": "npm package name, including scope when needed"
+      },
+      "version": {
+        "type": "string",
+        "description": "Version or dist-tag to inspect",
+        "default": "latest"
+      },
+      "includeVersions": {
+        "type": "boolean",
+        "description": "Include a short list of recent versions",
+        "default": false
+      }
+    },
+    "required": ["packageName"]
+  },
+  "handler": "handler.ts"
+}

@@ -8,11 +8,13 @@
 
 import { readdir, readFile, stat } from "fs/promises";
 import { join, resolve, extname } from "path";
+import { readProjectEnv } from "./env-file";
 
 export type Plugin = {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  env?: Record<string, string>;
   handlerPath: string;
   handlerType: "bash" | "typescript";
   pluginDir: string;
@@ -22,6 +24,7 @@ type PluginManifest = {
   name: string;
   description: string;
   inputSchema?: Record<string, unknown>;
+  env?: Record<string, string>;
   handler: string;
 };
 
@@ -70,6 +73,7 @@ export async function loadPlugins(cwd: string = process.cwd()): Promise<Plugin[]
           name: manifest.name,
           description: manifest.description,
           inputSchema: manifest.inputSchema ?? { type: "object", properties: {} },
+          env: manifest.env,
           handlerPath,
           handlerType,
           pluginDir,
@@ -115,6 +119,7 @@ async function executeBashPlugin(plugin: Plugin, inputJson: string): Promise<str
     stdout: "pipe",
     stderr: "pipe",
     env: {
+      ...readProjectEnv(),
       ...process.env,
       PLUGIN_INPUT: inputJson,
       PROJECT_DIR: process.cwd(),
@@ -143,6 +148,7 @@ async function executeTypescriptPlugin(plugin: Plugin, inputJson: string): Promi
     stdout: "pipe",
     stderr: "pipe",
     env: {
+      ...readProjectEnv(),
       ...process.env,
       PLUGIN_INPUT: inputJson,
       PROJECT_DIR: process.cwd(),

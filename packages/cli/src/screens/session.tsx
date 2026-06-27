@@ -88,12 +88,22 @@ function SessionChat({
   );
   const { goal, isPlanning, planError, startGoal, updateTaskStatus, abortGoal } = useGoalTracker();
   const hasSubmittedInitialPromptRef = useRef(false);
+  const activityRef = useRef({ status, isPlanning });
+
+  useEffect(() => {
+    activityRef.current = { status, isPlanning };
+  }, [status, isPlanning]);
 
   // Stop the pending reply when the user leaves this session.
   // Also start/stop file watcher.
   useEffect(() => {
     const watcher = getFileWatcher();
     watcher.start(process.cwd(), (event) => {
+      const active = activityRef.current.status === "submitted"
+        || activityRef.current.status === "streaming"
+        || activityRef.current.isPlanning;
+      if (active) return;
+
       toast.show({
         message: formatFileChanges(event.files),
       });

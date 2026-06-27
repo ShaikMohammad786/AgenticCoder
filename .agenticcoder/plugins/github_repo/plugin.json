@@ -1,0 +1,29 @@
+{
+  "name": "github_repo",
+  "description": "Inspect a public GitHub repository, latest releases, or open issues. Uses GITHUB_TOKEN when available.",
+  "env": {
+    "GITHUB_TOKEN": "GitHub token for higher API limits"
+  },
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "repo": {
+        "type": "string",
+        "description": "Repository in owner/name format"
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["summary", "releases", "issues"],
+        "description": "Information to fetch",
+        "default": "summary"
+      },
+      "count": {
+        "type": "number",
+        "description": "Number of releases or issues to return",
+        "default": 5
+      }
+    },
+    "required": ["repo"]
+  },
+  "handler": "handler.ts"
+}

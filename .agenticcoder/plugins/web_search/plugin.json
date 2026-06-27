@@ -1,0 +1,35 @@
+{
+  "name": "web_search",
+  "description": "Search the web. Uses Brave Search when BRAVE_API_KEY is set, otherwise falls back to DuckDuckGo Instant Answer.",
+  "env": {
+    "BRAVE_API_KEY": "Brave Search API key for full web search results"
+  },
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Search query"
+      },
+      "count": {
+        "type": "number",
+        "description": "Number of results to return, from 1 to 10",
+        "default": 5
+      },
+      "provider": {
+        "type": "string",
+        "enum": ["auto", "brave", "duckduckgo"],
+        "description": "Search provider. auto uses Brave when BRAVE_API_KEY is set, otherwise DuckDuckGo.",
+        "default": "auto"
+      },
+      "freshness": {
+        "type": "string",
+        "enum": ["any", "pd", "pw", "pm", "py"],
+        "description": "Freshness filter for Brave: any, past day, past week, past month, or past year.",
+        "default": "any"
+      }
+    },
+    "required": ["query"]
+  },
+  "handler": "handler.ts"
+}

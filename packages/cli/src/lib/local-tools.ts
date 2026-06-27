@@ -329,15 +329,23 @@ export async function executeLocalTool(
       const { path, content } = toolInputSchemas.writeFile.parse(input);
       const { cwd, resolved } = resolveInsideCwd(path);
       const relPath = relative(cwd, resolved);
+      let oldContent = "";
+      try {
+        oldContent = await readFile(resolved, "utf-8");
+      } catch {
+        // New file.
+      }
       await mkdir(dirname(resolved), { recursive: true });
       await writeFile(resolved, content, "utf-8");
       getFileWatcher().markAiWritten(relPath.replace(/\\/g, "/"));
+      const diff = quickDiff(oldContent, content, relPath);
       // Auto-lint check
       const lint = await autoLint(relPath, cwd).catch(() => null);
       return {
         success: true as const,
         path: relPath,
         bytesWritten: Buffer.byteLength(content, "utf-8"),
+        diff,
         ...(lint && !lint.passed ? { lint: formatLintResult(lint) } : {}),
       };
     }

@@ -16,6 +16,9 @@ type ChangeCallback = (event: FileChangeEvent) => void;
 const DEBOUNCE_MS = 500;
 const IGNORED_DIRS = new Set(["node_modules", ".git", ".agenticcoder", "dist", "build", ".next", ".turbo"]);
 const IGNORED_EXTENSIONS = new Set([".log", ".lock", ".tmp", ".swp", ".swo"]);
+const IGNORED_PATH_PREFIXES = [
+  "packages/database/generated/prisma/",
+];
 
 export class FileWatcher {
   private watcher: FSWatcher | null = null;
@@ -66,6 +69,7 @@ export class FileWatcher {
         // Skip ignored directories
         const parts = normalizedPath.split("/");
         if (parts.some((p) => IGNORED_DIRS.has(p))) return;
+        if (IGNORED_PATH_PREFIXES.some((prefix) => normalizedPath.startsWith(prefix))) return;
 
         // Skip ignored extensions
         const ext = normalizedPath.includes(".") ? "." + normalizedPath.split(".").pop()! : "";

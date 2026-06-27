@@ -4,9 +4,18 @@ import { useDialog } from "../../providers/dialog";
 import { useToast } from "../../providers/toast";
 import { useTheme } from "../../providers/theme";
 import { DialogSearchList } from "../dialog-search-list";
-import { loadSkills, getBuiltinSkills, type Skill } from "../../lib/skills";
+import {
+  loadSkills,
+  getBuiltinSkills,
+  installCatalogSkill,
+  SKILL_CATALOG,
+  type Skill,
+  type SkillCatalogEntry,
+} from "../../lib/skills";
 
-type SkillItem = Skill & { isBuiltin: boolean };
+type InstalledSkillItem = Skill & { kind: "installed"; isBuiltin: boolean };
+type AvailableSkillItem = SkillCatalogEntry & { kind: "available"; isBuiltin: false; filePath: string };
+type SkillItem = InstalledSkillItem | AvailableSkillItem;
 
 type Props = {
   onSelectSkill: (skill: Skill) => void;
@@ -28,9 +37,21 @@ export const SkillsDialogContent = ({ onSelectSkill }: Props) => {
       ]);
       if (ignore) return;
 
+      const installedNames = new Set([
+        ...userSkills.map((s) => s.name.toLowerCase()),
+        ...builtinSkills.map((s) => s.name.toLowerCase()),
+      ]);
       const all: SkillItem[] = [
-        ...userSkills.map((s) => ({ ...s, isBuiltin: false })),
-        ...builtinSkills.map((s) => ({ ...s, isBuiltin: true })),
+        ...userSkills.map((s) => ({ ...s, kind: "installed" as const, isBuiltin: false })),
+        ...builtinSkills.map((s) => ({ ...s, kind: "installed" as const, isBuiltin: true })),
+        ...SKILL_CATALOG
+          .filter((s) => !installedNames.has(s.name.toLowerCase()))
+          .map((s) => ({
+            ...s,
+            kind: "available" as const,
+            isBuiltin: false,
+            filePath: `__catalog__/${s.fileName}`,
+          })),
       ];
       setItems(all);
       setLoading(false);
@@ -39,7 +60,18 @@ export const SkillsDialogContent = ({ onSelectSkill }: Props) => {
   }, []);
 
   const handleSelect = useCallback(
-    (item: SkillItem) => {
+    async (item: SkillItem) => {
+      if (item.kind === "available") {
+        const installed = await installCatalogSkill(item);
+        dialog.close();
+        onSelectSkill(installed);
+        toast.show({
+          variant: "success",
+          message: `Installed and activated skill "${installed.name}".`,
+        });
+        return;
+      }
+
       dialog.close();
       onSelectSkill(item);
       toast.show({
@@ -67,7 +99,7 @@ export const SkillsDialogContent = ({ onSelectSkill }: Props) => {
         item.description.toLowerCase().includes(query.toLowerCase())
       }
       renderItem={(item, isSelected) => {
-        const badge = item.isBuiltin ? "★" : "◆";
+        const badge = item.kind === "available" ? "+" : item.isBuiltin ? "*" : "-";
         const modeBadge = item.mode ? ` [${item.mode}]` : "";
         return (
           <text selectable={false} fg={isSelected ? "black" : "white"}>
