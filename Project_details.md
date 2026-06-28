@@ -2258,3 +2258,716 @@ AgenticCoder is a **4-package monorepo** with **20+ features** where:
 
 The AI never touches your files directly. The server acts as a relay between you and the AI model. For complex tasks, the AI spawns **specialized subagents** that work in parallel with isolated contexts.
 
+**NEW**  AgenticCoder Architecture Documentation **NEW**
+
+## 1. High-Level Flow
+
+```text
+User input
+    │
+    ▼
+CLI useChat hook
+    │
+    ▼
+Project Context + Memory + MCP Tools + Plugin Tools Loaded Locally
+    │
+    ▼
+Server (/chat)
+    │
+    ▼
+Provider Model (AI SDK)
+    │
+    ▼
+Tool Calls Streamed Back to CLI
+    │
+    ▼
+CLI Executes:
+    • Built-in Tools
+    • Plugin Tools
+    • MCP Tools
+    │
+    ▼
+Tool Outputs Sent Back to Model
+    │
+    ▼
+Final Assistant Message Saved to Database
+```
+
+> **Important:**  
+> The server never directly reads or writes the user's local files. All local tool execution happens inside the CLI process.
+
+---
+
+# 2. Monorepo Packages
+
+## packages/shared
+
+Shared contracts used by both the CLI and Server.
+
+### Important Files
+
+#### `src/models.ts`
+
+Contains:
+
+- Provider list
+- Model catalog
+- Pricing
+- Vision support
+- Environment key hints
+- Ollama model detection
+
+#### `src/schemas.ts`
+
+Contains:
+
+- Plan Mode schemas
+- Build Mode schemas
+- Built-in tool schemas
+- `spawnAgent` schema
+- Read-only tool contracts
+- Build tool contracts
+
+Also includes token helpers used during context trimming.
+
+### Supported Providers
+
+```text
+OpenRouter
+OpenAI
+Anthropic
+Gemini
+Groq
+Together
+Fireworks
+Cerebras
+DeepSeek
+xAI
+Mistral
+Perplexity
+Cloudflare
+NVIDIA
+NaraRouter
+Ollama
+```
+
+---
+
+## packages/database
+
+Owns all Prisma and database access.
+
+### Important Files
+
+- `prisma/schema.prisma`
+- `src/client.ts`
+- `src/index.ts`
+
+### Storage
+
+Sessions store AI SDK `UIMessage[]` as JSON, avoiding the need for a custom message table.
+
+---
+
+## packages/server
+
+Responsible for:
+
+- HTTP routes
+- Prompt assembly
+- Billing
+- Model selection
+- AI SDK streaming
+
+### Important Files
+
+| File | Purpose |
+|------|---------|
+| `src/index.ts` | Express startup |
+| `src/routes/chat.ts` | Chat streaming endpoint |
+| `src/system-prompts.ts` | Main AgenticCoder system prompt |
+| `src/lib/models.ts` | Model/provider resolution |
+| `src/lib/credits.ts` | Billing |
+| `src/lib/context-manager.ts` | History trimming |
+| `src/lib/polar.ts` | Polar usage ingestion |
+
+---
+
+## packages/cli
+
+Responsible for:
+
+- Terminal UI
+- Local execution
+- Tool execution
+- Plugins
+- MCP
+- Memory
+- Indexing
+
+### Important Files
+
+| File | Purpose |
+|------|---------|
+| `src/hooks/use-chat.ts` | Chat loop |
+| `src/lib/local-tools.ts` | Built-in tool implementations |
+| `src/lib/mcp-client.ts` | MCP runtime |
+| `src/lib/plugins.ts` | Plugin loader |
+| `src/lib/plugin-registry.ts` | Install/update/remove plugins |
+| `src/lib/subagent.ts` | Subagent orchestration |
+| `src/lib/agent-prompts.ts` | Subagent prompts |
+| `src/lib/project-context.ts` | Project context loading |
+| `src/lib/memory.ts` | Memory retrieval |
+| `src/lib/indexer.ts` | Semantic code search |
+| `src/lib/terminal-markdown.ts` | Markdown rendering |
+| `src/components/subagent-status-bar.tsx` | Active subagents UI |
+| `src/components/dialogs/mcp-dialog.tsx` | MCP configuration |
+| `src/components/dialogs/models-dialog.tsx` | Model picker |
+
+---
+
+# 3. Chat Request Assembly
+
+The CLI (`packages/cli/src/hooks/use-chat.ts`) prepares every request.
+
+Before sending a prompt it loads:
+
+- Project context
+- `.agenticcoder/AGENT.md`
+- `.agenticcoder/context/*.md`
+- `package.json`
+- Plugin manifests
+- MCP configuration
+- Local skills
+- `.env` key names
+- MCP tool definitions
+- Plugin tool definitions
+- Relevant memories
+- Image attachments (`@image.png`)
+
+The server receives:
+
+```ts
+{
+  id,
+  messages,
+  mode,
+  model,
+  projectContext,
+  mcpTools,
+  memories
+}
+```
+
+> `mcpTools` contains both MCP tools and Plugin tools (historical naming).
+
+---
+
+# 4. Server Prompt & Tool Assembly
+
+Inside:
+
+```
+packages/server/src/routes/chat.ts
+```
+
+Pipeline:
+
+1. Validate request
+2. Load session
+3. Build built-in tools
+4. Merge MCP + Plugin tools
+5. Normalize JSON schemas
+6. Build system prompt from:
+   - Base AgenticCoder prompt
+   - Tool list
+   - Memories
+   - Project context
+7. Trim history
+8. Call `streamText()`
+9. Save conversation
+10. Bill cloud usage
+
+Provider behavior is mostly unified through prompt and tool assembly.
+
+---
+
+# 5. Provider Resolution
+
+Located in:
+
+```
+packages/server/src/lib/models.ts
+```
+
+### Routing Rules
+
+| Pattern | Route |
+|----------|------|
+| `ollama:model` | Local Ollama endpoint |
+| OpenRouter ID | `createOpenRouter().chat()` |
+| `openai:model` | OpenAI |
+| `anthropic:model` | Anthropic |
+| `provider:model` | OpenAI-compatible endpoint |
+
+### NaraRouter
+
+```
+NARAROUTER_BASE_URL
+
+or
+
+https://api.nararouter.com/v1
+```
+
+---
+
+# 6. Billing
+
+Billing is usage-based.
+
+### Local Models
+
+- Ollama → Free
+
+### Cloud Models
+
+Uses:
+
+- Catalog pricing
+- Provider fallback pricing
+
+Files:
+
+- `credits.ts`
+- `chat.ts`
+- `models.ts`
+
+---
+
+# 7. Built-in Tool Execution
+
+Located in:
+
+```
+packages/cli/src/lib/local-tools.ts
+```
+
+### Build Mode Tools
+
+```text
+readFile
+listDirectory
+glob
+grep
+listCodeDefinitions
+fileInfo
+searchCodebase
+writeFile
+editFile
+searchReplace
+bash
+gitStatus
+gitDiff
+gitLog
+gitBlame
+fetchUrl
+thinkOut
+spawnAgent
+```
+
+### Safety Features
+
+- Workspace path restrictions
+- Private/local host blocking
+- Automatic checkpoints
+- File watcher suppression
+- Inline diffs
+- Streamed bash output
+- Output limits
+
+---
+
+# 8. MCP System
+
+Configuration:
+
+```
+.agenticcoder/mcp.json
+```
+
+Client:
+
+```
+packages/cli/src/lib/mcp-client.ts
+```
+
+### Startup Flow
+
+1. Initialize servers
+2. Send `initialize`
+3. Request `tools/list`
+4. Prefix tool names
+
+```
+mcp_<server>_<tool>
+```
+
+5. Normalize schemas
+6. Route `tools/call`
+
+### Default MCP Servers
+
+```text
+filesystem
+memory
+sequential-thinking
+context7
+playwright
+```
+
+### Available Catalog
+
+```text
+puppeteer
+fetch
+git
+time
+github
+brave-search
+postgres
+sqlite
+slack
+google-maps
+google-drive
+n8n
+telegram
+notion
+supabase
+stripe
+redis
+docker
+kubernetes
+aws
+...
+```
+
+---
+
+# 9. Scoped MCP Runtime for Subagents
+
+Problem:
+
+Multiple agents sharing one Playwright/browser instance overwrite each other.
+
+Solution:
+
+Each subagent gets its own scoped MCP runtime.
+
+```
+toolScope = agentId
+```
+
+Playwright outputs:
+
+```
+.agenticcoder/playwright-output/<agent-id>
+```
+
+Benefits:
+
+- Parallel execution
+- Isolated browser sessions
+- No shared state corruption
+
+---
+
+# 10. Plugin System
+
+Location:
+
+```
+.agenticcoder/plugins/<plugin-name>
+```
+
+### Manifest
+
+```json
+{
+  "name": "...",
+  "description": "...",
+  "inputSchema": {},
+  "handler": "handler.ts",
+  "env": {}
+}
+```
+
+### Execution
+
+Plugins become
+
+```
+plugin_<name>
+```
+
+Environment variables include:
+
+- `PLUGIN_INPUT`
+- `PROJECT_DIR`
+- `AGENTICCODER_TOOL_SCOPE`
+
+### Installation
+
+```text
+/plugin install github:user/repo
+
+/plugin install npm:package
+
+/plugin install https://...
+
+/plugin remove
+
+/plugin update
+```
+
+---
+
+# 11. Subagent System
+
+Files:
+
+- `schemas.ts`
+- `subagent.ts`
+- `agent-prompts.ts`
+- `chat.ts`
+- `subagent-status-bar.tsx`
+
+### Agent Types
+
+| Type | Access | Purpose |
+|------|--------|---------|
+| Researcher | Read | Research |
+| Planner | Read | Planning |
+| Reviewer | Read | Code review |
+| Coder | Write | Implementation |
+| Debugger | Write | Bug fixing |
+
+### Runtime
+
+- Parallel execution
+- Focused prompts
+- Shared tool inheritance
+- JSONL logs
+- UI transcript viewer
+- Parent summary aggregation
+
+---
+
+# 12. Prompt & Context
+
+The system prompt teaches models:
+
+- The provider is only the reasoning engine.
+- AgenticCoder provides the tools.
+- Prefer using tools over plain text.
+- Never expose secrets.
+- Continue using fallbacks when tools fail.
+
+Project context includes:
+
+- `AGENT.md`
+- Context files
+- Package scripts
+- Installed plugins
+- MCP configuration
+- Local skills
+- `.env` key names (never values)
+
+---
+
+# 13. Streaming & UI Reliability
+
+Recent improvements:
+
+- Streaming raw text during generation
+- Markdown rendering after completion
+- ANSI stripping
+- Proper diff rendering
+- Throttled metrics
+- Better provider error messages
+- Empty completion diagnostics
+- Windows `/copy` support
+
+---
+
+# 14. File Watcher
+
+Location:
+
+```
+packages/cli/src/lib/file-watcher.ts
+```
+
+Behavior:
+
+- Ignore noisy folders
+- Debounce changes
+- Ignore AI-generated writes
+- Notify user about external edits
+- Never interrupt model execution
+
+---
+
+# 15. Checkpoints
+
+Location:
+
+```
+packages/cli/src/lib/checkpoint.ts
+```
+
+Uses Git stash checkpoints.
+
+Write operations automatically call:
+
+```
+ensureCheckpoint()
+```
+
+View:
+
+```
+/checkpoints
+```
+
+---
+
+# 16. Memory
+
+Location:
+
+```
+packages/cli/src/lib/memory.ts
+```
+
+Features:
+
+- Store learnings
+- Retrieve relevant memories
+- Inject into future prompts
+
+---
+
+# 17. Semantic Code Search
+
+`searchCodebase` uses a semantic index.
+
+Preferred search order:
+
+1. `searchCodebase`
+2. `grep`
+3. `glob`
+4. `listDirectory`
+
+---
+
+# 18. Models Dialog
+
+Provider grouping:
+
+```text
+OpenRouter
+OpenAI
+Anthropic
+Gemini
+Groq
+Together
+Fireworks
+Cerebras
+DeepSeek
+xAI
+Mistral
+Perplexity
+Cloudflare
+NVIDIA
+NaraRouter
+Ollama
+```
+
+---
+
+# 19. Known Model Behavior
+
+Smaller models may:
+
+- Finish without text
+- Skip tool calls
+- Struggle with browser agents
+
+AgenticCoder responds by:
+
+- Showing diagnostics
+- Keeping sessions usable
+- Recommending stronger models
+
+Strong models are recommended for:
+
+- Subagents
+- Browser automation
+- Multi-step editing
+- Heavy MCP workflows
+
+---
+
+# 20. Build & Verification
+
+```bash
+bun run --filter @agenticcoder/server build
+
+bun run --filter @agenticcoder/cli build
+```
+
+Notes:
+
+- `packages/shared` has no standalone build.
+- Windows sandbox builds may fail with `EPERM`.
+- Local builds generally succeed.
+- MCP smoke tests require unrestricted network/process access.
+
+---
+
+# 21. Extension Surface
+
+AgenticCoder supports extensions through:
+
+- Local plugins
+- External plugins
+- MCP servers
+- Local skills
+- `AGENT.md`
+- Context files
+- Provider catalog entries
+
+These are exposed to the model via tool definitions and prompt context.
+
+---
+
+# 22. Summary
+
+AgenticCoder is a **multi-provider local coding agent** featuring:
+
+- Multiple AI providers
+- Provider-aware billing
+- Local tool execution
+- Dynamic MCP integration
+- Plugin system
+- Scoped MCP isolation
+- Parallel subagents
+- Streaming UI
+- Robust error handling
+- Persistent memory
+- Project context
+- Git checkpoints
+- File watching
+- Semantic code search
+- Terminal-first developer experience
