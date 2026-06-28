@@ -35,6 +35,39 @@ type ChatTools = {
 
 export type Message = UIMessage<ChatMessageMetadata, never, ChatTools>;
 
+function hasVisibleAssistantContent(message: Message): boolean {
+  if (message.role !== "assistant") return true;
+
+  for (const part of message.parts ?? []) {
+    if (part.type === "text" && "text" in part && String(part.text ?? "").trim()) {
+      return true;
+    }
+    if (part.type === "reasoning" && "text" in part && String(part.text ?? "").trim()) {
+      return true;
+    }
+    if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
+      return true;
+    }
+    if (part.type === "file") {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function createEmptyResponseMessage(metadata?: ChatMessageMetadata): Message {
+  return {
+    id: `empty-response-${Date.now()}`,
+    role: "assistant",
+    metadata,
+    parts: [{
+      type: "text",
+      text: "The selected provider finished without returning visible text or a tool call. Nothing was executed. Please retry this prompt; if it repeats, switch to a stronger tool-calling model for this task.",
+    }],
+  };
+}
+
 export function useChat(sessionId: string, initialMessages: Message[]) {
   // Cache project context so we only detect once per session
   const projectContextRef = useRef<string | null>(null);
@@ -58,6 +91,8 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
 
   // Streaming metrics
   const [streamMetrics, setStreamMetrics] = useState<StreamMetrics | null>(null);
+  const streamMetricsLastUpdateRef = useRef(0);
+  const emptyResponseGuardRef = useRef(false);
 
   // Bash streaming state (local to session, no provider needed)
   const [bashOutput, setBashOutput] = useState("");
@@ -300,6 +335,31 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
   });
 
+  useEffect(() => {
+    if (chat.status !== "ready" || !emptyResponseGuardRef.current) return;
+
+    emptyResponseGuardRef.current = false;
+    if (chat.error) return;
+
+    chat.setMessages((messages) => {
+      const currentLastMessage = messages.at(-1);
+      if (!currentLastMessage) return messages;
+
+      if (currentLastMessage.role === "user") {
+        return [...messages, createEmptyResponseMessage(currentLastMessage.metadata)];
+      }
+
+      if (currentLastMessage.role === "assistant" && !hasVisibleAssistantContent(currentLastMessage)) {
+        return [
+          ...messages.slice(0, -1),
+          createEmptyResponseMessage(currentLastMessage.metadata),
+        ];
+      }
+
+      return messages;
+    });
+  }, [chat.status, chat.error, chat.messages, chat.setMessages]);
+
   // Track streaming progress
   useEffect(() => {
     const tracker = getStreamingTracker();
@@ -312,10 +372,15 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
           .map((p) => (p as { text: string }).text)
           .join("");
         tracker.onChunk(text.slice(-50)); // Feed latest chunk
-        setStreamMetrics(tracker.getMetrics());
+        const now = Date.now();
+        if (now - streamMetricsLastUpdateRef.current > 250) {
+          streamMetricsLastUpdateRef.current = now;
+          setStreamMetrics(tracker.getMetrics());
+        }
       }
     } else if (chat.status === "ready") {
       tracker.stop();
+      streamMetricsLastUpdateRef.current = 0;
       const final = tracker.getMetrics();
       if (final.tokensGenerated > 0) {
         setStreamMetrics(final);
@@ -354,6 +419,7 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     submit: async (params: { userText: string; mode: ModeType; model: SupportedChatModelId | string }) => {
       // Start streaming tracker
       getStreamingTracker().start();
+      emptyResponseGuardRef.current = true;
 
       await ensureRuntimeContext();
 

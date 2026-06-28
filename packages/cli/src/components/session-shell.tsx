@@ -30,6 +30,7 @@ type Props = {
   loading?: boolean;
   interruptible?: boolean;
   streamingStatus?: string;
+  footerExtra?: ReactNode;
 };
 
 export function SessionShell({
@@ -39,6 +40,7 @@ export function SessionShell({
   loading = false,
   interruptible = false,
   streamingStatus,
+  footerExtra,
 }: Props) {
   const { mode } = usePromptConfig();
   const { colors } = useTheme();
@@ -76,10 +78,16 @@ export function SessionShell({
               {streamingStatus ? (
                 <text attributes={TextAttributes.DIM}>{streamingStatus}</text>
               ) : null}
+              {footerExtra}
               {interruptible ? <text>esc to interrupt</text> : null}
             </>
           ) : streamingStatus ? (
-            <text attributes={TextAttributes.DIM}>{streamingStatus}</text>
+            <>
+              <text attributes={TextAttributes.DIM}>{streamingStatus}</text>
+              {footerExtra}
+            </>
+          ) : footerExtra ? (
+            footerExtra
           ) : null}
         </box>
 

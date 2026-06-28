@@ -171,7 +171,7 @@ export const buildToolContracts = {
     inputSchema: toolInputSchemas.searchReplace,
   }),
   spawnAgent: tool({
-    description: `Spawn specialized subagents to handle complex, multi-step tasks in parallel. Each agent runs in its own isolated context with focused tools.
+    description: `Spawn specialized subagents to handle complex, multi-step tasks in parallel. Each agent runs locally through AgenticCoder with focused built-in tools plus inherited MCP/plugin tools when available.
 
 Agent types:
 - researcher: Read-only codebase exploration. Use for gathering context, finding patterns, understanding architecture.
@@ -189,7 +189,13 @@ DO spawn agents when:
 - Task involves 3+ files across different components
 - Task has naturally parallelizable sub-tasks (e.g., research + implement)
 - Task requires both deep analysis AND code changes
-- Task is a large refactor, migration, or multi-file feature`,
+- Task is a large refactor, migration, or multi-file feature
+
+Execution expectations:
+- Give each agent a concrete task with files, scope, and expected output
+- Use coder/debugger agents for real file edits; they should not merely write instructions
+- Use researcher/reviewer/planner agents for read-only work and exact findings
+- The parent agent must read the returned summaries, integrate results, verify final state, and explain any blockers`,
     inputSchema: toolInputSchemas.spawnAgent,
   }),
 } as const;

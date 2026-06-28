@@ -23,6 +23,17 @@ terminalMarked.setOptions({
   }) as any,
 });
 
+const ANSI_PATTERN = /[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+const CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+
+export function sanitizeTerminalText(text: string): string {
+  return text
+    .replace(ANSI_PATTERN, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(CONTROL_PATTERN, "");
+}
+
 /**
  * Render markdown text to ANSI-styled terminal string.
  * Falls back to raw text if parsing fails.
@@ -34,12 +45,14 @@ export function renderMarkdown(text: string): string {
     const rendered = terminalMarked.parse(text);
     if (typeof rendered === "string") {
       // Trim trailing whitespace/newlines that marked adds
-      return rendered.replace(/\n{3,}/g, "\n\n").trimEnd();
+      return sanitizeTerminalText(rendered)
+        .replace(/\n{3,}/g, "\n\n")
+        .trimEnd();
     }
     // If marked returns a Promise (async mode), fall back
-    return text;
+    return sanitizeTerminalText(text);
   } catch {
-    return text;
+    return sanitizeTerminalText(text);
   }
 }
 

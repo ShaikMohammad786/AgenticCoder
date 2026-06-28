@@ -81,6 +81,41 @@ function normalizeToolInputSchema(schema: unknown): JsonObject {
   return normalized;
 }
 
+function formatExternalToolContext(tools?: Array<{ name: string; description?: string }>): string {
+  if (!tools || tools.length === 0) return "";
+
+  const grouped = new Map<string, Array<{ name: string; description?: string }>>();
+  for (const tool of tools) {
+    const prefix = tool.name.startsWith("mcp_")
+      ? tool.name.match(/^mcp_([^_]+)_/)?.[1] ?? "mcp"
+      : tool.name.startsWith("plugin_")
+        ? "plugins"
+        : "external";
+    const list = grouped.get(prefix) ?? [];
+    list.push(tool);
+    grouped.set(prefix, list);
+  }
+
+  const sections = [...grouped.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([group, groupTools]) => {
+      const renderedTools = groupTools
+        .slice(0, 30)
+        .map((tool) => `- ${tool.name}${tool.description ? `: ${tool.description}` : ""}`)
+        .join("\n");
+      const extra = groupTools.length > 30 ? `\n- ... ${groupTools.length - 30} more ${group} tools` : "";
+      return `### ${group}\n${renderedTools}${extra}`;
+    })
+    .join("\n\n");
+
+  return `
+## Connected Plugin and MCP Tools
+These tools were discovered locally by AgenticCoder before this request and are callable in this conversation for the selected model/provider.
+Call them directly when they match the task. Do not claim the browser, web search, filesystem, memory, docs, or external plugin capabilities are unavailable when a matching tool is listed here.
+
+${sections}`;
+}
+
 function parseProviderErrorBody(body: unknown): string | undefined {
   if (typeof body !== "string" || body.trim().length === 0) return undefined;
 
@@ -268,9 +303,16 @@ router.post(
         (m) => m.id && Array.isArray(m.parts) && m.parts.length > 0
       );
 
-      // Build system prompt with memories
-      const systemPromptBase = buildSystemPrompt({ mode, hasImages: false });
+      const hasImages = validMessages.some((m) =>
+        m.parts?.some((p: any) => p.type === "file" && p.mediaType?.startsWith("image/"))
+        || (m as any).experimental_attachments?.length > 0
+      );
+
+      // Build system prompt with live runtime context.
+      const systemPromptBase = buildSystemPrompt({ mode, hasImages });
+      const externalToolContext = formatExternalToolContext(mcpTools);
       const fullSystemPrompt = systemPromptBase
+        + (externalToolContext ? "\n\n" + externalToolContext : "")
         + (memories ? "\n" + memories : "")
         + (projectContext ? "\n\n" + projectContext : "");
 
@@ -299,11 +341,6 @@ router.post(
       // Request timeout — abort if AI takes longer than 120s
       const abortController = new AbortController();
       const requestTimeout = setTimeout(() => abortController.abort(), 120_000);
-
-      const hasImages = trimmedMessages.some((m) =>
-        m.parts?.some((p: any) => p.type === "file" && p.mediaType?.startsWith("image/"))
-        || (m as any).experimental_attachments?.length > 0
-      );
 
       const result = streamText({
         model: resolvedModel.model,

@@ -4,6 +4,7 @@ import { useTheme } from "../../providers/theme";
 import type { Message } from "../../hooks/use-chat";
 import { Mode, type ModeType } from "@agenticcoder/shared";
 import { TextAttributes } from "@opentui/core";
+import { hasMarkdownSyntax, renderMarkdown, sanitizeTerminalText } from "../../lib/terminal-markdown";
 
 type ClientMessagePart = Message["parts"][number];
 type ToolPart = Extract<ClientMessagePart, { type: `tool-${string}` | "dynamic-tool" }>;
@@ -31,8 +32,8 @@ function isToolPart(part: ClientMessagePart): part is ToolPart {
 
 function formatToolArgs(tc: ToolPart): string {
   if (!("input" in tc) || tc.input == null) return "";
-  if (typeof tc.input !== "object") return String(tc.input);
-  return Object.values(tc.input).map(String).join(" ");
+  if (typeof tc.input !== "object") return sanitizeTerminalText(String(tc.input));
+  return sanitizeTerminalText(Object.values(tc.input).map(String).join(" "));
 }
 
 function formatTokens(n: number): string {
@@ -96,7 +97,7 @@ export function BotMessage({
                   paddingX={2}
                 >
                   <text attributes={TextAttributes.DIM}>
-                    <em fg={colors.thinking}>Thinking:</em> {part.text}
+                    <em fg={colors.thinking}>Thinking:</em> {sanitizeTerminalText(part.text)}
                   </text>
                 </box>
               );
@@ -143,7 +144,7 @@ export function BotMessage({
                       </em>{" "}
                       {formatToolArgs(part)}
                       {isPending ? " ..." : ""}
-                      {isError ? ` ${part.errorText}` : ""}
+                      {isError ? ` ${sanitizeTerminalText(String(part.errorText ?? ""))}` : ""}
                     </text>
                   </box>
                   {/* Inline diff for file edits */}
@@ -158,15 +159,20 @@ export function BotMessage({
                       width="100%"
                       paddingX={4}
                     >
-                      <text>
-                        {inlineDiff.split("\n").slice(0, 20).map((line) => {
-                          if (line.startsWith("+")) return `\x1b[32m${line}\x1b[0m`;
-                          if (line.startsWith("-")) return `\x1b[31m${line}\x1b[0m`;
-                          if (line.startsWith("@@") || line.startsWith("---") || line.startsWith("+++")) return `\x1b[36m${line}\x1b[0m`;
-                          return `\x1b[2m${line}\x1b[0m`;
-                        }).join("\n")}
-                        {inlineDiff.split("\n").length > 20 ? `\n\x1b[2m  ... ${inlineDiff.split("\n").length - 20} more lines\x1b[0m` : ""}
-                      </text>
+                      {sanitizeTerminalText(inlineDiff).split("\n").slice(0, 20).map((line, lineIndex) => (
+                        <text
+                          key={`diff-${part.toolCallId}-${lineIndex}`}
+                          fg={diffLineColor(line, colors)}
+                          attributes={line.startsWith(" ") ? TextAttributes.DIM : undefined}
+                        >
+                          {line.length > 0 ? line : " "}
+                        </text>
+                      ))}
+                      {sanitizeTerminalText(inlineDiff).split("\n").length > 20 && (
+                        <text attributes={TextAttributes.DIM}>
+                          {`  ... ${sanitizeTerminalText(inlineDiff).split("\n").length - 20} more lines`}
+                        </text>
+                      )}
                     </box>
                   )}
                   {showLiveOutput && (
@@ -181,7 +187,7 @@ export function BotMessage({
                       paddingX={4}
                     >
                       <text attributes={TextAttributes.DIM}>
-                        {bashOutput.trim().split("\n").slice(-8).join("\n")}
+                        {sanitizeTerminalText(bashOutput).trim().split("\n").slice(-8).join("\n")}
                       </text>
                     </box>
                   )}
@@ -190,16 +196,7 @@ export function BotMessage({
             }
 
             if (part.type === "text") {
-              // Render markdown to ANSI-styled terminal text
-              let displayText = part.text ?? "";
-              try {
-                const { renderMarkdown, hasMarkdownSyntax } = require("../../lib/terminal-markdown");
-                if (hasMarkdownSyntax(displayText)) {
-                  displayText = renderMarkdown(displayText);
-                }
-              } catch {
-                // markdown renderer not available — show raw
-              }
+              const displayText = renderMessageText(part.text ?? "", streaming);
               return (
                 <box key={`text-${j}`} paddingX={3} width="100%">
                   <text>{displayText}</text>
@@ -249,3 +246,16 @@ export function BotMessage({
     </box>
   );
 };
+
+function renderMessageText(text: string, streaming: boolean): string {
+  const cleanText = sanitizeTerminalText(text);
+  if (streaming || !hasMarkdownSyntax(cleanText)) return cleanText;
+  return renderMarkdown(cleanText);
+}
+
+function diffLineColor(line: string, colors: ReturnType<typeof useTheme>["colors"]) {
+  if (line.startsWith("+")) return "#82E0AA";
+  if (line.startsWith("-")) return "#E74C5E";
+  if (line.startsWith("@@") || line.startsWith("---") || line.startsWith("+++")) return colors.info;
+  return undefined;
+}

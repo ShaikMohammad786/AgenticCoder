@@ -21,6 +21,7 @@ import { getErrorMessage } from "../lib/http-errors";
 import { formatErrorMessage } from "../lib/error-message";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { getFileWatcher, formatFileChanges } from "../lib/file-watcher";
+import { SubAgentStatusBar } from "../components/subagent-status-bar";
 
 type SessionData = {
   id: string;
@@ -43,10 +44,11 @@ const sessionLocationSchema = z.object({
 });
 
 function ChatMessage(
-  { msg, bashOutput, isBashStreaming }: {
+  { msg, bashOutput, isBashStreaming, streaming = false }: {
     msg: Message;
     bashOutput?: string;
     isBashStreaming?: boolean;
+    streaming?: boolean;
   }
 ) {
   if (msg.role === "user") {
@@ -65,7 +67,7 @@ function ChatMessage(
       mode={msg.metadata?.mode ?? "BUILD"}
       durationMs={msg.metadata?.durationMs}
       usage={msg.metadata?.usage}
-      streaming={false}
+      streaming={streaming}
       bashOutput={bashOutput}
       isBashStreaming={isBashStreaming}
     />
@@ -237,11 +239,18 @@ function SessionChat({
       loading={status === "submitted" || status === "streaming" || isPlanning}
       interruptible={status === "submitted" || status === "streaming" || isPlanning}
       streamingStatus={streamingStatus}
+      footerExtra={<SubAgentStatusBar />}
     >
       <GoalTracker goal={goal} isPlanning={isPlanning} planError={planError} />
 
-      {messages.map((msg) => (
-        <ChatMessage key={msg.id} msg={msg} bashOutput={bashOutput} isBashStreaming={isBashStreaming} />
+      {messages.map((msg, index) => (
+        <ChatMessage
+          key={msg.id}
+          msg={msg}
+          bashOutput={bashOutput}
+          isBashStreaming={isBashStreaming}
+          streaming={status === "streaming" && index === messages.length - 1 && msg.role === "assistant"}
+        />
       ))}
       
       {pendingApproval && (

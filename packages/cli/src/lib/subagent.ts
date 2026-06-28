@@ -61,6 +61,19 @@ type SubAgentToolCall = {
   part: Record<string, unknown>;
 };
 
+export type ActiveSubAgent = {
+  id: string;
+  type: AgentTypeValue;
+  status: "running" | SubAgentResult["status"];
+  task: string;
+  startedAt: number;
+  updatedAt: number;
+  logPath: string;
+  messages: SubAgentMessage[];
+  summary?: string;
+  errors?: string[];
+};
+
 // ─── Logging (Filesystem-based, like Antigravity/Claude Code) ──────────
 
 const LOG_DIR = join(homedir(), ".agenticcoder", "subagent-logs");
@@ -85,6 +98,17 @@ function appendLog(logPath: string, entry: SubAgentLogEntry): void {
   } catch {
     // Non-critical — don't crash if logging fails
   }
+}
+
+function updateActiveAgent(agentId: string, patch: Partial<ActiveSubAgent>): void {
+  const current = activeAgents.get(agentId);
+  if (!current) return;
+
+  activeAgents.set(agentId, {
+    ...current,
+    ...patch,
+    updatedAt: Date.now(),
+  });
 }
 
 // ─── Single SubAgent Execution ─────────────────────────────────────────
@@ -137,6 +161,7 @@ async function executeSubAgent(
         parts: [{ type: "text", text: userMessage }],
       },
     ];
+    updateActiveAgent(agentId, { messages: [...messages] });
     const inheritedToolNames = runtimeContext.externalTools?.map((tool) => tool.name) ?? [];
     const allowedTools = [...new Set([...config.allowedTools, ...inheritedToolNames])];
     const builtInToolMode: ModeType = config.isReadOnly || parentMode === "PLAN" ? "PLAN" : "BUILD";
@@ -166,9 +191,11 @@ async function executeSubAgent(
       const turn = await collectSubAgentTurn(response, agentId, request.type, logPath, abortSignal);
       if (turn.assistantMessage) {
         messages.push(turn.assistantMessage);
+        updateActiveAgent(agentId, { messages: [...messages] });
       }
       if (turn.text.trim()) {
         finalSummary = turn.text.trim();
+        updateActiveAgent(agentId, { summary: finalSummary });
       }
 
       if (turn.toolCalls.length === 0) {
@@ -194,6 +221,7 @@ async function executeSubAgent(
 
         if (turn.assistantMessage) {
           applyToolOutputToMessage(turn.assistantMessage, toolCall, output);
+          updateActiveAgent(agentId, { messages: [...messages] });
         }
       }
 
@@ -278,10 +306,20 @@ function buildSubAgentPrompt(
     runtimeContext.projectContext ? runtimeContext.projectContext : `No parent project context was provided.`,
     runtimeContext.memories ? `\n## Relevant Memory\n${runtimeContext.memories}` : "",
     externalTools ? `\n## Inherited Plugin/MCP Tools\n${externalTools}` : "",
-    `Plugin tools are named \`plugin_<name>\`; MCP tools are named \`mcp_<server>_<tool>\`. If listed above, you may call them directly.`,
+    `Plugin tools are named \`plugin_<name>\`; MCP tools are named \`mcp_<server>_<tool>\`. If listed above, you may call them directly. They run locally in the parent AgenticCoder CLI, independent of the selected model provider.`,
+    `Use inherited tools when they match the task. Do not claim browser, web search, repository, docs, filesystem, memory, or plugin capabilities are unavailable when a matching inherited tool is listed.`,
+    `If a tool fails, inspect the error and try the closest available fallback before reporting a blocker.`,
     `Read-only subagents must avoid external tools with obvious write or destructive side effects.`,
     `Never ask for or print secret values. Refer only to required env var names.`,
   ].filter(Boolean).join("\n");
+  const executionProtocol = [
+    `## Execution Protocol`,
+    `- Act through tools, then summarize results. Do not respond with instructions for the parent to run unless you truly lack the needed tool.`,
+    `- If assigned to create, edit, test, inspect, browse, or search, perform that work directly with available tools.`,
+    `- The parent model/provider choice does not reduce your capabilities. Treat Ollama/local and remote models the same from a workflow perspective.`,
+    `- Keep intermediate commentary short; spend your step budget on tool calls and concrete findings.`,
+    `- Always return the exact files changed, commands run, errors encountered, and remaining blockers.`,
+  ].join("\n");
   
   const constraints = [
     `## Constraints`,
@@ -294,7 +332,7 @@ function buildSubAgentPrompt(
     `- Be concise in your responses — the parent agent will read your output.`,
   ].join("\n");
 
-  return `${basePrompt}\n\n${externalToolContext}\n\n## Available Tools\n${toolList}\n\n${constraints}`;
+  return `${basePrompt}\n\n${externalToolContext}\n\n${executionProtocol}\n\n## Available Tools\n${toolList}\n\n${constraints}`;
 }
 
 function buildSubAgentUserMessage(request: SubAgentRequest): string {
@@ -770,10 +808,15 @@ async function legacyProcessSubAgentStream(
 // ─── Orchestrator ───────────────────────────────────────────────────
 
 // Global state for UI status tracking
-let activeAgents: Map<string, { type: AgentTypeValue; status: string }> = new Map();
+let activeAgents: Map<string, ActiveSubAgent> = new Map();
 
-export function getActiveAgents(): Map<string, { type: AgentTypeValue; status: string }> {
-  return activeAgents;
+export function getActiveAgents(): Map<string, ActiveSubAgent> {
+  return new Map(activeAgents);
+}
+
+export function getActiveAgent(agentId: string): ActiveSubAgent | undefined {
+  const agent = activeAgents.get(agentId);
+  return agent ? { ...agent, messages: [...agent.messages] } : undefined;
 }
 
 export class SubAgentOrchestrator {
@@ -825,7 +868,16 @@ export class SubAgentOrchestrator {
         }, config.timeoutMs);
 
         // Track for UI
-        activeAgents.set(agentId, { type: agent.type, status: "running" });
+        activeAgents.set(agentId, {
+          id: agentId,
+          type: agent.type,
+          status: "running",
+          task: agent.task,
+          startedAt: Date.now(),
+          updatedAt: Date.now(),
+          logPath,
+          messages: [],
+        });
         console.error(`[subagent] > ${agent.type} agent started: "${agent.task.slice(0, 80)}..."`);
 
         const promise = executeSubAgent(
@@ -840,7 +892,11 @@ export class SubAgentOrchestrator {
         ).then((result) => {
           clearTimeout(timeoutHandle);
           results.push(result);
-          activeAgents.set(agentId, { type: agent.type, status: result.status });
+          updateActiveAgent(agentId, {
+            status: result.status,
+            summary: result.summary,
+            errors: result.errors,
+          });
           
           const icon = result.status === "completed" ? "[OK]" : result.status === "timeout" ? "[TIMEOUT]" : "[FAIL]";
           console.error(`[subagent] ${icon} ${agent.type} agent ${result.status} (${Math.round(result.durationMs / 1000)}s, ${result.toolCallCount} tools)`);
@@ -857,7 +913,11 @@ export class SubAgentOrchestrator {
             durationMs: Date.now(),
             toolCallCount: 0,
           });
-          activeAgents.set(agentId, { type: agent.type, status: "failed" });
+          updateActiveAgent(agentId, {
+            status: "failed",
+            summary: `Agent crashed: ${msg}`,
+            errors: [msg],
+          });
           console.error(`[subagent] [FAIL] ${agent.type} agent crashed: ${msg}`);
         }).finally(() => {
           // Remove from running
@@ -881,7 +941,7 @@ export class SubAgentOrchestrator {
           activeAgents.delete(id);
         }
       }
-    }, 5000);
+    }, 30_000);
 
     console.error(`[subagent] All ${agents.length} agent(s) completed.\n`);
 
