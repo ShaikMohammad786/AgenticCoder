@@ -17,6 +17,7 @@ import { initializeMcp, getAllMcpTools, hasMcpConfig } from "../lib/mcp-client";
 import { loadPlugins, pluginsToToolDefinitions, type Plugin } from "../lib/plugins";
 import { retrieveRelevantMemories, extractLearnings, saveMemories, formatMemoriesForPrompt } from "../lib/memory";
 import { getStreamingTracker, type StreamMetrics } from "../lib/streaming-tracker";
+import { formatErrorMessage } from "../lib/error-message";
 
 export type ChatMessageMetadata = {
   mode?: ModeType;
@@ -283,7 +284,7 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
           // If user explicitly rejected, don't retry — report immediately
           const isUserRejection = error instanceof Error && error.message === "User rejected this action.";
           if (isUserRejection || attempt === MAX_RETRIES) {
-            const errorText = error instanceof Error ? error.message : String(error);
+            const errorText = formatErrorMessage(error);
             chat.addToolOutput({
               tool: toolCall.toolName as keyof ChatTools,
               toolCallId: toolCall.toolCallId,

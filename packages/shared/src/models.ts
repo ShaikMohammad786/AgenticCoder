@@ -18,6 +18,9 @@ export type SupportedProvider =
   | "xai"
   | "mistral"
   | "perplexity"
+  | "cloudflare"
+  | "nvidia"
+  | "nararouter"
   | "ollama";
 
 type SupportedChatModelDefinition = {
@@ -27,11 +30,6 @@ type SupportedChatModelDefinition = {
   supportsVision?: boolean;
   apiModelId?: string;
   envKeys?: readonly string[];
-};
-
-const FREE_PRICING: ModelPricing = {
-  inputUsdPerMillionTokens: 0,
-  outputUsdPerMillionTokens: 0,
 };
 
 const PRICING = {
@@ -67,6 +65,12 @@ const PRICING = {
     small: { inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.3 },
     codestral: { inputUsdPerMillionTokens: 0.3, outputUsdPerMillionTokens: 0.9 },
   },
+  nararouter: {
+    mimoFree: { inputUsdPerMillionTokens: 0.03, outputUsdPerMillionTokens: 0.08 },
+    mimoProFree: { inputUsdPerMillionTokens: 0.13, outputUsdPerMillionTokens: 0.26 },
+    mistralLarge: { inputUsdPerMillionTokens: 0.05, outputUsdPerMillionTokens: 0.15 },
+    mistralMedium35: { inputUsdPerMillionTokens: 0.15, outputUsdPerMillionTokens: 0.74 },
+  },
 } satisfies Record<string, Record<string, ModelPricing>>;
 
 export const DEFAULT_PROVIDER_PRICING: Record<Exclude<SupportedProvider, "ollama">, ModelPricing> = {
@@ -82,6 +86,9 @@ export const DEFAULT_PROVIDER_PRICING: Record<Exclude<SupportedProvider, "ollama
   xai: { inputUsdPerMillionTokens: 3, outputUsdPerMillionTokens: 15 },
   mistral: { inputUsdPerMillionTokens: 2, outputUsdPerMillionTokens: 6 },
   perplexity: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 3 },
+  cloudflare: { inputUsdPerMillionTokens: 0.2, outputUsdPerMillionTokens: 0.8 },
+  nvidia: { inputUsdPerMillionTokens: 0.5, outputUsdPerMillionTokens: 1.5 },
+  nararouter: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 3 },
 };
 
 function byok(
@@ -108,18 +115,26 @@ function openrouter(model: string, supportsVision = false, pricing?: ModelPricin
   return {
     id: model,
     provider: "openrouter",
-    pricing: pricing ?? (model.endsWith(":free") ? FREE_PRICING : DEFAULT_PROVIDER_PRICING.openrouter),
+    pricing: pricing ?? DEFAULT_PROVIDER_PRICING.openrouter,
     supportsVision,
   };
 }
 
 export const SUPPORTED_CHAT_MODELS = [
-  // OpenRouter free/community models. These keep their native OpenRouter IDs.
+  // OpenRouter free/community catalog entries. They still use fallback billing prices.
   openrouter("qwen/qwen3-coder:free"),
   openrouter("openai/gpt-oss-120b:free"),
   openrouter("openai/gpt-oss-20b:free"),
   openrouter("meta-llama/llama-3.3-70b-instruct:free"),
   openrouter("nousresearch/hermes-3-llama-3.1-405b:free"),
+  openrouter("deepseek/deepseek-r1-0528:free"),
+  openrouter("deepseek/deepseek-chat-v3-0324:free"),
+  openrouter("mistralai/devstral-small:free"),
+  openrouter("moonshotai/kimi-dev-72b:free"),
+  openrouter("qwen/qwen3-235b-a22b:free"),
+  openrouter("qwen/qwen3-32b:free"),
+  openrouter("meta-llama/llama-4-maverick:free"),
+  openrouter("meta-llama/llama-4-scout:free"),
   openrouter("nvidia/nemotron-3-ultra-550b-a55b:free"),
   openrouter("nvidia/nemotron-3-super-120b-a12b:free"),
   openrouter("nvidia/nemotron-3-nano-30b-a3b:free"),
@@ -217,15 +232,20 @@ export const SUPPORTED_CHAT_MODELS = [
   byok("groq", "openai/gpt-oss-20b", { envKeys: ["GROQ_API_KEY"] }),
   byok("groq", "llama-3.3-70b-versatile", { envKeys: ["GROQ_API_KEY"] }),
   byok("groq", "llama-3.1-8b-instant", { envKeys: ["GROQ_API_KEY"] }),
+  byok("groq", "meta-llama/llama-4-scout-17b-16e-instruct", { envKeys: ["GROQ_API_KEY"] }),
+  byok("groq", "meta-llama/llama-4-maverick-17b-128e-instruct", { envKeys: ["GROQ_API_KEY"] }),
   byok("groq", "qwen/qwen3-32b", { envKeys: ["GROQ_API_KEY"] }),
   byok("groq", "deepseek-r1-distill-llama-70b", { envKeys: ["GROQ_API_KEY"] }),
   byok("groq", "moonshotai/kimi-k2-instruct", { envKeys: ["GROQ_API_KEY"] }),
+  byok("groq", "gemma2-9b-it", { envKeys: ["GROQ_API_KEY"] }),
+  byok("groq", "mistral-saba-24b", { envKeys: ["GROQ_API_KEY"] }),
   byok("groq", "compound-beta", { envKeys: ["GROQ_API_KEY"] }),
   byok("groq", "compound-beta-mini", { envKeys: ["GROQ_API_KEY"] }),
 
   byok("cerebras", "qwen-3-coder-480b", { envKeys: ["CEREBRAS_API_KEY"] }),
   byok("cerebras", "qwen-3-235b-a22b-instruct-2507", { envKeys: ["CEREBRAS_API_KEY"] }),
   byok("cerebras", "qwen-3-32b", { envKeys: ["CEREBRAS_API_KEY"] }),
+  byok("cerebras", "llama-4-maverick-17b-128e-instruct", { envKeys: ["CEREBRAS_API_KEY"] }),
   byok("cerebras", "llama-4-scout-17b-16e-instruct", { envKeys: ["CEREBRAS_API_KEY"] }),
   byok("cerebras", "llama3.1-8b", { envKeys: ["CEREBRAS_API_KEY"] }),
 
@@ -234,10 +254,13 @@ export const SUPPORTED_CHAT_MODELS = [
   byok("together", "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo", { envKeys: ["TOGETHER_API_KEY"] }),
   byok("together", "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", { envKeys: ["TOGETHER_API_KEY"] }),
   byok("together", "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8", { envKeys: ["TOGETHER_API_KEY"] }),
+  byok("together", "Qwen/Qwen2.5-72B-Instruct-Turbo", { envKeys: ["TOGETHER_API_KEY"] }),
   byok("together", "Qwen/Qwen2.5-Coder-32B-Instruct", { envKeys: ["TOGETHER_API_KEY"] }),
   byok("together", "deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free", { envKeys: ["TOGETHER_API_KEY"] }),
   byok("together", "deepseek-ai/DeepSeek-V3", { envKeys: ["TOGETHER_API_KEY"] }),
   byok("together", "mistralai/Mixtral-8x7B-Instruct-v0.1", { envKeys: ["TOGETHER_API_KEY"] }),
+  byok("together", "mistralai/Mistral-7B-Instruct-v0.3", { envKeys: ["TOGETHER_API_KEY"] }),
+  byok("together", "google/gemma-2-27b-it", { envKeys: ["TOGETHER_API_KEY"] }),
 
   byok("fireworks", "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct", { envKeys: ["FIREWORKS_API_KEY"] }),
   byok("fireworks", "accounts/fireworks/models/qwen2p5-coder-32b-instruct", { envKeys: ["FIREWORKS_API_KEY"] }),
@@ -246,6 +269,41 @@ export const SUPPORTED_CHAT_MODELS = [
   byok("fireworks", "accounts/fireworks/models/llama4-scout-instruct-basic", { envKeys: ["FIREWORKS_API_KEY"] }),
   byok("fireworks", "accounts/fireworks/models/deepseek-v3", { envKeys: ["FIREWORKS_API_KEY"] }),
   byok("fireworks", "accounts/fireworks/models/deepseek-r1", { envKeys: ["FIREWORKS_API_KEY"] }),
+  byok("fireworks", "accounts/fireworks/models/mixtral-8x7b-instruct", { envKeys: ["FIREWORKS_API_KEY"] }),
+  byok("fireworks", "accounts/fireworks/models/mistral-7b-instruct-4k", { envKeys: ["FIREWORKS_API_KEY"] }),
+
+  byok("cloudflare", "@cf/meta/llama-3.3-70b-instruct-fp8-fast", { envKeys: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_AI_API_TOKEN"] }),
+  byok("cloudflare", "@cf/meta/llama-3.1-8b-instruct", { envKeys: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_AI_API_TOKEN"] }),
+  byok("cloudflare", "@cf/meta/llama-3.2-3b-instruct", { envKeys: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_AI_API_TOKEN"] }),
+  byok("cloudflare", "@cf/meta/llama-3.2-1b-instruct", { envKeys: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_AI_API_TOKEN"] }),
+  byok("cloudflare", "@cf/qwen/qwen2.5-coder-32b-instruct", { envKeys: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_AI_API_TOKEN"] }),
+  byok("cloudflare", "@cf/qwen/qwen1.5-14b-chat-awq", { envKeys: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_AI_API_TOKEN"] }),
+  byok("cloudflare", "@cf/mistral/mistral-7b-instruct-v0.2-lora", { envKeys: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_AI_API_TOKEN"] }),
+  byok("cloudflare", "@cf/google/gemma-7b-it-lora", { envKeys: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_AI_API_TOKEN"] }),
+
+  byok("nvidia", "meta/llama-3.3-70b-instruct", { envKeys: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"] }),
+  byok("nvidia", "meta/llama-3.1-405b-instruct", { envKeys: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"] }),
+  byok("nvidia", "meta/llama-3.1-70b-instruct", { envKeys: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"] }),
+  byok("nvidia", "meta/llama-3.1-8b-instruct", { envKeys: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"] }),
+  byok("nvidia", "nvidia/llama-3.1-nemotron-70b-instruct", { envKeys: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"] }),
+  byok("nvidia", "nvidia/llama-3.1-nemotron-ultra-253b-v1", { envKeys: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"] }),
+  byok("nvidia", "nvidia/nemotron-4-340b-instruct", { envKeys: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"] }),
+  byok("nvidia", "mistralai/mixtral-8x7b-instruct-v0.1", { envKeys: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"] }),
+  byok("nvidia", "qwen/qwen2.5-coder-32b-instruct", { envKeys: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"] }),
+  byok("nvidia", "deepseek-ai/deepseek-r1", { envKeys: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"] }),
+
+  byok("nararouter", "mimo-v2.5-free", { supportsVision: true, envKeys: ["NARAROUTER_API_KEY"], pricing: PRICING.nararouter.mimoFree }),
+  byok("nararouter", "mimo-v2.5-pro-free", { envKeys: ["NARAROUTER_API_KEY"], pricing: PRICING.nararouter.mimoProFree }),
+  byok("nararouter", "mistral-large", { envKeys: ["NARAROUTER_API_KEY"], pricing: PRICING.nararouter.mistralLarge }),
+  byok("nararouter", "mistral-medium-3-5", { supportsVision: true, envKeys: ["NARAROUTER_API_KEY"], pricing: PRICING.nararouter.mistralMedium35 }),
+  byok("nararouter", "openai/gpt-oss-120b", { envKeys: ["NARAROUTER_API_KEY"] }),
+  byok("nararouter", "qwen/qwen3-coder", { envKeys: ["NARAROUTER_API_KEY"] }),
+  byok("nararouter", "qwen/qwen3-32b", { envKeys: ["NARAROUTER_API_KEY"] }),
+  byok("nararouter", "deepseek/deepseek-chat", { envKeys: ["NARAROUTER_API_KEY"] }),
+  byok("nararouter", "deepseek/deepseek-r1", { envKeys: ["NARAROUTER_API_KEY"] }),
+  byok("nararouter", "meta-llama/llama-3.3-70b-instruct", { envKeys: ["NARAROUTER_API_KEY"] }),
+  byok("nararouter", "google/gemini-2.5-flash", { supportsVision: true, envKeys: ["NARAROUTER_API_KEY"] }),
+  byok("nararouter", "anthropic/claude-sonnet-4.5", { supportsVision: true, envKeys: ["NARAROUTER_API_KEY"] }),
 
   // Other direct providers.
   byok("deepseek", "deepseek-chat", { envKeys: ["DEEPSEEK_API_KEY"], pricing: PRICING.deepseek.chat }),

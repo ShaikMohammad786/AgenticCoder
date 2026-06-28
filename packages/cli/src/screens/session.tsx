@@ -18,6 +18,7 @@ import { useGoalTracker } from "../hooks/use-goal-tracker";
 import { SubAgentOrchestrator } from "../lib/subagent";
 import { apiClient } from "../lib/api-client";
 import { getErrorMessage } from "../lib/http-errors";
+import { formatErrorMessage } from "../lib/error-message";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
 import { getFileWatcher, formatFileChanges } from "../lib/file-watcher";
 
@@ -251,7 +252,7 @@ function SessionChat({
         />
       )}
 
-      {error && <ErrorMessage message={error.message} />}
+      {error && <ErrorMessage message={formatErrorMessage(error)} />}
     </SessionShell>
   );
 }

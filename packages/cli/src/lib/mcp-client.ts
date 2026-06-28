@@ -75,6 +75,49 @@ const connections: Map<string, McpConnection> = new Map();
 const REQUEST_TIMEOUT_MS = 30_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const MAX_STDERR_LENGTH = 8_000;
+const JSON_SCHEMA_TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeJsonSchemaValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeJsonSchemaValue);
+  }
+
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const normalized: Record<string, unknown> = {};
+  for (const [key, childValue] of Object.entries(value)) {
+    normalized[key] = normalizeJsonSchemaValue(childValue);
+  }
+
+  if (typeof normalized.type === "string" && !JSON_SCHEMA_TYPES.has(normalized.type)) {
+    delete normalized.type;
+  }
+
+  return normalized;
+}
+
+function normalizeToolInputSchema(schema: unknown): Record<string, unknown> {
+  const normalized = normalizeJsonSchemaValue(schema);
+  if (!isPlainObject(normalized)) {
+    return { type: "object", properties: {} };
+  }
+
+  if (normalized.type !== "object") {
+    normalized.type = "object";
+  }
+
+  if (!isPlainObject(normalized.properties)) {
+    normalized.properties = {};
+  }
+
+  return normalized;
+}
 
 // ─── Config ──────────────────────────────────────────────────────
 
@@ -402,7 +445,7 @@ export function getAllMcpTools(): {
         name: `mcp_${serverName}_${tool.name}`,
         serverName,
         description: tool.description ?? `MCP tool from ${serverName}`,
-        inputSchema: tool.inputSchema,
+        inputSchema: normalizeToolInputSchema(tool.inputSchema),
       });
     }
   }

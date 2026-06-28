@@ -35,6 +35,110 @@ type ChatMessageMetadata = {
 };
 
 type agenticcoderUIMessage = UIMessage<ChatMessageMetadata, never, InferUITools<ToolContracts>>;
+type JsonObject = Record<string, unknown>;
+
+const JSON_SCHEMA_TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
+
+function isPlainObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeJsonSchemaValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeJsonSchemaValue);
+  }
+
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const normalized: JsonObject = {};
+  for (const [key, childValue] of Object.entries(value)) {
+    normalized[key] = normalizeJsonSchemaValue(childValue);
+  }
+
+  if (typeof normalized.type === "string" && !JSON_SCHEMA_TYPES.has(normalized.type)) {
+    delete normalized.type;
+  }
+
+  return normalized;
+}
+
+function normalizeToolInputSchema(schema: unknown): JsonObject {
+  const normalized = normalizeJsonSchemaValue(schema);
+  if (!isPlainObject(normalized)) {
+    return { type: "object", properties: {} };
+  }
+
+  if (normalized.type !== "object") {
+    normalized.type = "object";
+  }
+
+  if (!isPlainObject(normalized.properties)) {
+    normalized.properties = {};
+  }
+
+  return normalized;
+}
+
+function parseProviderErrorBody(body: unknown): string | undefined {
+  if (typeof body !== "string" || body.trim().length === 0) return undefined;
+
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return formatUnknownError(parsed);
+  } catch {
+    return body;
+  }
+}
+
+function formatUnknownError(error: unknown): string {
+  if (typeof error === "string") return error;
+
+  if (error instanceof Error && error.message && error.message !== "[object Object]") {
+    return error.message;
+  }
+
+  if (isPlainObject(error)) {
+    const responseBodyMessage = parseProviderErrorBody(error.responseBody);
+    if (responseBodyMessage) return responseBodyMessage;
+
+    const message = error.message;
+    if (typeof message === "string" && message && message !== "[object Object]") {
+      return message;
+    }
+
+    const nestedError = error.error;
+    if (typeof nestedError === "string" && nestedError) return nestedError;
+    if (isPlainObject(nestedError)) {
+      const nestedMessage = nestedError.message;
+      if (typeof nestedMessage === "string" && nestedMessage) return nestedMessage;
+    }
+
+    const cause = error.cause;
+    if (cause != null && cause !== error) {
+      const causeMessage = formatUnknownError(cause);
+      if (causeMessage && causeMessage !== "[object Object]") return causeMessage;
+    }
+
+    const statusCode = error.statusCode ?? error.status;
+    if (statusCode != null) {
+      return `Provider request failed with status ${String(statusCode)}`;
+    }
+
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "Unknown object error";
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message || "Unknown error";
+  }
+
+  return String(error);
+}
 
 const messageSchema = z.object({
   id: z.string(),
@@ -134,7 +238,7 @@ router.post(
         for (const mcpTool of mcpTools) {
           allTools[mcpTool.name] = {
             description: mcpTool.description,
-            parameters: mcpTool.inputSchema,
+            parameters: normalizeToolInputSchema(mcpTool.inputSchema),
           };
         }
       }
@@ -313,7 +417,7 @@ router.post(
           }
         },
         onError(error) {
-          return error instanceof Error ? error.message : String(error);
+          return formatUnknownError(error);
         },
       });
 
@@ -410,7 +514,7 @@ router.post(
         if (allowedTools.includes(externalTool.name)) {
           filteredTools[externalTool.name] = {
             description: externalTool.description ?? `[External] ${externalTool.name}`,
-            parameters: externalTool.inputSchema ?? {},
+            parameters: normalizeToolInputSchema(externalTool.inputSchema),
           };
         }
       }
@@ -455,7 +559,7 @@ router.post(
       const webResponse = result.toUIMessageStreamResponse<agenticcoderUIMessage>({
         originalMessages: nextMessages,
         onError(error) {
-          return error instanceof Error ? error.message : String(error);
+          return formatUnknownError(error);
         },
       });
 

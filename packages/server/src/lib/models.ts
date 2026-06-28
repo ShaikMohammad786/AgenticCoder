@@ -25,11 +25,15 @@ const DIRECT_PROVIDER_PREFIXES = new Set<ProviderPrefix>([
   "xai",
   "mistral",
   "perplexity",
+  "cloudflare",
+  "nvidia",
+  "nararouter",
 ]);
 
 const OPENAI_COMPATIBLE_PROVIDERS: Record<Exclude<RemoteProvider, "anthropic">, {
-  baseURL?: string;
+  baseURL?: string | (() => string);
   envKeys: string[];
+  useChatCompletions?: boolean;
 }> = {
   openai: {
     envKeys: ["OPENAI_API_KEY"],
@@ -37,38 +41,62 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<Exclude<RemoteProvider, "anthropic">, 
   gemini: {
     baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
     envKeys: ["GEMINI_API_KEY", "GOOGLE_AI_STUDIO_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
+    useChatCompletions: true,
   },
   groq: {
     baseURL: "https://api.groq.com/openai/v1",
     envKeys: ["GROQ_API_KEY"],
+    useChatCompletions: true,
   },
   together: {
     baseURL: "https://api.together.xyz/v1",
     envKeys: ["TOGETHER_API_KEY"],
+    useChatCompletions: true,
   },
   fireworks: {
     baseURL: "https://api.fireworks.ai/inference/v1",
     envKeys: ["FIREWORKS_API_KEY"],
+    useChatCompletions: true,
   },
   cerebras: {
     baseURL: "https://api.cerebras.ai/v1",
     envKeys: ["CEREBRAS_API_KEY"],
+    useChatCompletions: true,
   },
   deepseek: {
     baseURL: "https://api.deepseek.com",
     envKeys: ["DEEPSEEK_API_KEY"],
+    useChatCompletions: true,
   },
   xai: {
     baseURL: "https://api.x.ai/v1",
     envKeys: ["XAI_API_KEY"],
+    useChatCompletions: true,
   },
   mistral: {
     baseURL: "https://api.mistral.ai/v1",
     envKeys: ["MISTRAL_API_KEY"],
+    useChatCompletions: true,
   },
   perplexity: {
     baseURL: "https://api.perplexity.ai",
     envKeys: ["PERPLEXITY_API_KEY"],
+    useChatCompletions: true,
+  },
+  cloudflare: {
+    baseURL: getCloudflareBaseURL,
+    envKeys: ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_AI_API_TOKEN"],
+    useChatCompletions: true,
+  },
+  nvidia: {
+    baseURL: "https://integrate.api.nvidia.com/v1",
+    envKeys: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
+    useChatCompletions: true,
+  },
+  nararouter: {
+    baseURL: () => getOptionalEnv("NARAROUTER_BASE_URL") ?? "https://api.nararouter.com/v1",
+    envKeys: ["NARAROUTER_API_KEY"],
+    useChatCompletions: true,
   },
 };
 
@@ -90,6 +118,11 @@ function getRequiredEnv(names: string[], provider: string): string {
   }
 
   throw new Error(`Missing API key for ${provider}. Set one of: ${names.join(", ")}`);
+}
+
+function getCloudflareBaseURL(): string {
+  const accountId = getRequiredEnv(["CLOUDFLARE_ACCOUNT_ID"], "cloudflare");
+  return `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1`;
 }
 
 function getOllamaOpenAIBaseURL(): string {
@@ -120,13 +153,20 @@ function getOpenAICompatibleProvider(provider: Exclude<RemoteProvider, "anthropi
   if (cached) return cached as OpenAIProvider;
 
   const config = OPENAI_COMPATIBLE_PROVIDERS[provider];
+  const baseURL = typeof config.baseURL === "function" ? config.baseURL() : config.baseURL;
   const instance = createOpenAI({
     name: provider,
     apiKey: getRequiredEnv(config.envKeys, provider),
-    ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+    ...(baseURL ? { baseURL } : {}),
   });
   providerCache.set(provider, instance);
   return instance;
+}
+
+function getOpenAICompatibleModel(provider: Exclude<RemoteProvider, "anthropic">, apiModelId: string): LanguageModel {
+  const instance = getOpenAICompatibleProvider(provider);
+  const config = OPENAI_COMPATIBLE_PROVIDERS[provider];
+  return config.useChatCompletions ? instance.chat(apiModelId) : instance(apiModelId);
 }
 
 function getAnthropicProvider() {
@@ -199,7 +239,7 @@ export function resolveChatModel(modelId: string): ResolvedModel {
   }
 
   return {
-    model: getOpenAICompatibleProvider(directModel.provider)(directModel.apiModelId),
+    model: getOpenAICompatibleModel(directModel.provider, directModel.apiModelId),
     provider: directModel.provider,
     modelId,
     isLocal: false,

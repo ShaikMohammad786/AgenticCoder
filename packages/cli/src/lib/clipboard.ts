@@ -33,9 +33,30 @@ export async function writeClipboard(text: string): Promise<void> {
 
 async function writeClipboardWithProcess(command: string[], text: string): Promise<void> {
   const proc = Bun.spawn(command, { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-  const writer = proc.stdin.getWriter();
-  await writer.write(new TextEncoder().encode(text));
-  await writer.close();
+  const stdin = proc.stdin as unknown;
+
+  if (stdin && typeof (stdin as { getWriter?: unknown }).getWriter === "function") {
+    const writer = (stdin as WritableStream<Uint8Array>).getWriter();
+    await writer.write(new TextEncoder().encode(text));
+    await writer.close();
+  } else if (stdin && typeof (stdin as { write?: unknown }).write === "function") {
+    await new Promise<void>((resolve, reject) => {
+      const writable = stdin as {
+        write: (chunk: string) => boolean | number | void;
+        end: (callback?: () => void) => void;
+        once?: (event: string, callback: (error: Error) => void) => void;
+      };
+      writable.once?.("error", reject);
+      try {
+        writable.write(text);
+        writable.end(resolve);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  } else {
+    throw new Error("Clipboard process stdin is not writable");
+  }
 
   const [exitCode, stderr] = await Promise.all([
     proc.exited,
