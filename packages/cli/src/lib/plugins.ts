@@ -93,14 +93,18 @@ export async function loadPlugins(cwd: string = process.cwd()): Promise<Plugin[]
  * Execute a plugin's handler with the given input.
  * Returns the handler's stdout as a string.
  */
-export async function executePlugin(plugin: Plugin, input: unknown): Promise<string> {
+export async function executePlugin(
+  plugin: Plugin,
+  input: unknown,
+  options?: { scopeId?: string },
+): Promise<string> {
   const inputStr = JSON.stringify(input ?? {});
 
   try {
     if (plugin.handlerType === "typescript") {
-      return await executeTypescriptPlugin(plugin, inputStr);
+      return await executeTypescriptPlugin(plugin, inputStr, options);
     } else {
-      return await executeBashPlugin(plugin, inputStr);
+      return await executeBashPlugin(plugin, inputStr, options);
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -108,7 +112,11 @@ export async function executePlugin(plugin: Plugin, input: unknown): Promise<str
   }
 }
 
-async function executeBashPlugin(plugin: Plugin, inputJson: string): Promise<string> {
+async function executeBashPlugin(
+  plugin: Plugin,
+  inputJson: string,
+  options?: { scopeId?: string },
+): Promise<string> {
   const isWindows = process.platform === "win32";
   const shell = isWindows
     ? ["powershell", "-NoProfile", "-Command", `$env:PLUGIN_INPUT='${inputJson.replace(/'/g, "''")}'; & '${plugin.handlerPath}'`]
@@ -123,6 +131,7 @@ async function executeBashPlugin(plugin: Plugin, inputJson: string): Promise<str
       ...process.env,
       PLUGIN_INPUT: inputJson,
       PROJECT_DIR: process.cwd(),
+      ...(options?.scopeId ? { AGENTICCODER_TOOL_SCOPE: options.scopeId } : {}),
     },
   });
 
@@ -142,7 +151,11 @@ async function executeBashPlugin(plugin: Plugin, inputJson: string): Promise<str
   return stdout.slice(0, MAX_PLUGIN_OUTPUT);
 }
 
-async function executeTypescriptPlugin(plugin: Plugin, inputJson: string): Promise<string> {
+async function executeTypescriptPlugin(
+  plugin: Plugin,
+  inputJson: string,
+  options?: { scopeId?: string },
+): Promise<string> {
   const proc = Bun.spawn(["bun", "run", plugin.handlerPath], {
     cwd: plugin.pluginDir,
     stdout: "pipe",
@@ -152,6 +165,7 @@ async function executeTypescriptPlugin(plugin: Plugin, inputJson: string): Promi
       ...process.env,
       PLUGIN_INPUT: inputJson,
       PROJECT_DIR: process.cwd(),
+      ...(options?.scopeId ? { AGENTICCODER_TOOL_SCOPE: options.scopeId } : {}),
     },
   });
 

@@ -236,6 +236,7 @@ export type ToolCallbacks = {
   sessionId?: string;
   model?: string;
   runtimeContext?: SubAgentRuntimeContext;
+  toolScope?: string;
 };
 
 async function ensureCheckpoint() {
@@ -702,14 +703,18 @@ export async function executeLocalTool(
         const pluginName = getPluginName(toolName);
         const plugin = plugins.find((p) => p.name === pluginName);
         if (!plugin) throw new Error(`Plugin not found: ${pluginName}`);
-        const result = await executePlugin(plugin, input);
+        const result = await executePlugin(plugin, input, { scopeId: callbacks?.toolScope });
         return { output: result };
       }
 
       // Route MCP tools to the MCP client
       if (isMcpTool(toolName)) {
         try {
-          return await executeMcpTool(toolName, input as Record<string, unknown>);
+          return await executeMcpTool(
+            toolName,
+            input as Record<string, unknown>,
+            callbacks?.toolScope ? { scopeId: callbacks.toolScope } : undefined,
+          );
         } catch (err) {
           const serverName = toolName.replace(/^mcp_/, "").split("_")[0];
           throw new Error(`MCP tool failed [${serverName}]: ${err instanceof Error ? err.message : String(err)}`);

@@ -6,6 +6,7 @@ import { AGENT_SYSTEM_PROMPTS, AGENT_CONFIGS, type AgentConfig } from "./agent-p
 import { apiClient } from "./api-client";
 import { getAuth } from "./auth";
 import { executeLocalTool } from "./local-tools";
+import { shutdownMcpScope } from "./mcp-client";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -242,6 +243,7 @@ async function executeSubAgent(
         data: { durationMs: Date.now() - startTime },
       });
 
+      shutdownMcpScope(agentId);
       return {
         agentId,
         type: request.type,
@@ -274,6 +276,7 @@ async function executeSubAgent(
     data: { durationMs, toolCallCount, filesChanged, status: errors.length > 0 ? "failed" : "completed" },
   });
 
+  shutdownMcpScope(agentId);
   return {
     agentId,
     type: request.type,
@@ -658,7 +661,7 @@ async function executeSubAgentToolCall(opts: {
       toolCall.toolName,
       toolCall.input,
       mode,
-      { sessionId, model: parentModel },
+      { sessionId, model: parentModel, toolScope: agentId },
     );
 
     if (["writeFile", "editFile", "searchReplace"].includes(toolCall.toolName) && isRecord(toolCall.input)) {

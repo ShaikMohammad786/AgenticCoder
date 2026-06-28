@@ -72,6 +72,7 @@ interface JsonRpcResponse {
 // ─── State ───────────────────────────────────────────────────────
 
 const connections: Map<string, McpConnection> = new Map();
+const scopedConnections: Map<string, Map<string, McpConnection>> = new Map();
 const REQUEST_TIMEOUT_MS = 30_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const MAX_STDERR_LENGTH = 8_000;
@@ -369,6 +370,58 @@ async function connectToServer(
   return conn;
 }
 
+function safeScopeName(scopeId: string): string {
+  return scopeId.replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 80) || "default";
+}
+
+function withScopedServerConfig(serverName: string, config: McpServerConfig, scopeId?: string): McpServerConfig {
+  if (!scopeId) return config;
+
+  const scopedConfig: McpServerConfig = {
+    ...config,
+    args: [...(config.args ?? [])],
+    env: {
+      ...(config.env ?? {}),
+      AGENTICCODER_TOOL_SCOPE: scopeId,
+    },
+  };
+
+  const packageArgs = scopedConfig.args.map((arg) => arg.toLowerCase());
+  const isPlaywright = serverName === "playwright" || packageArgs.some((arg) => arg.includes("@playwright/mcp"));
+  if (!isPlaywright) return scopedConfig;
+
+  const outputDir = join(".agenticcoder", "playwright-output", safeScopeName(scopeId));
+  const outputDirIndex = scopedConfig.args.indexOf("--output-dir");
+  if (outputDirIndex >= 0) {
+    scopedConfig.args[outputDirIndex + 1] = outputDir;
+  } else {
+    scopedConfig.args.push("--output-dir", outputDir);
+  }
+
+  return scopedConfig;
+}
+
+async function getScopedConnection(serverName: string, scopeId: string): Promise<McpConnection> {
+  let scopeConnections = scopedConnections.get(scopeId);
+  if (!scopeConnections) {
+    scopeConnections = new Map();
+    scopedConnections.set(scopeId, scopeConnections);
+  }
+
+  const existing = scopeConnections.get(serverName);
+  if (existing && !existing.process.killed) return existing;
+
+  const config = loadMcpConfig();
+  const serverConfig = config?.mcpServers?.[serverName];
+  if (!serverConfig) {
+    throw new Error(`MCP server "${serverName}" is not configured`);
+  }
+
+  const conn = await connectToServer(serverName, withScopedServerConfig(serverName, serverConfig, scopeId));
+  scopeConnections.set(serverName, conn);
+  return conn;
+}
+
 function resolveConfiguredEnv(env?: Record<string, string>) {
   if (!env) return {};
 
@@ -459,6 +512,7 @@ export function getAllMcpTools(): {
 export async function callMcpTool(
   toolName: string,
   args: Record<string, unknown>,
+  options?: { scopeId?: string },
 ): Promise<unknown> {
   // Parse "mcp_serverName_toolName" format
   const match = toolName.match(/^mcp_([^_]+)_(.+)$/);
@@ -467,7 +521,9 @@ export async function callMcpTool(
   }
 
   const [, serverName, actualToolName] = match;
-  const conn = connections.get(serverName!);
+  const conn = options?.scopeId
+    ? await getScopedConnection(serverName!, options.scopeId)
+    : connections.get(serverName!);
 
   if (!conn) {
     throw new Error(`MCP server "${serverName}" is not connected`);
@@ -531,6 +587,16 @@ export function disconnectAll(): void {
     }
   }
   connections.clear();
+  for (const [, scopeConnections] of scopedConnections) {
+    for (const [, conn] of scopeConnections) {
+      try {
+        conn.process.kill();
+      } catch {
+        // ignore
+      }
+    }
+  }
+  scopedConnections.clear();
 }
 
 /**
@@ -558,4 +624,28 @@ export function shutdownMcp(): void {
     }
   }
   connections.clear();
+  for (const [, scopeConnections] of scopedConnections) {
+    for (const [, conn] of scopeConnections) {
+      try {
+        conn.process.kill();
+      } catch {
+        // Process already dead
+      }
+    }
+  }
+  scopedConnections.clear();
+}
+
+export function shutdownMcpScope(scopeId: string): void {
+  const scopeConnections = scopedConnections.get(scopeId);
+  if (!scopeConnections) return;
+
+  for (const [, conn] of scopeConnections) {
+    try {
+      conn.process.kill();
+    } catch {
+      // Process already dead
+    }
+  }
+  scopedConnections.delete(scopeId);
 }
