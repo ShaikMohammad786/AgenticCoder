@@ -3,9 +3,12 @@
   "module": "src/index.tsx",
   "type": "module",
   "private": true,
+  "bin": {
+    "agenticcoder": "./dist/agenticcoder.js"
+  },
   "scripts": {
     "dev": "bun run --watch src/index.tsx",
-    "build": "bun build src/index.tsx --outdir dist --target bun",
+    "build": "bun build src/index.tsx src/agenticcoder.ts --outdir dist --target bun",
     "test": "bun test",
     "test:watch": "bun test --watch"
   },
