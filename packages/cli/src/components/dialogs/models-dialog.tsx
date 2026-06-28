@@ -13,11 +13,22 @@ type ModelsDialogContentProps = {
 
 function getModelDisplayName(id: string): { name: string; provider: string } {
   const model = SUPPORTED_CHAT_MODELS.find(m => m.id === id);
-  if (!model) return { name: id, provider: "" };
-  // Extract provider from id like "google/gemini-2.0-flash" -> "google"
-  const provider = id.split("/")[0] ?? "";
-  const name = id.split("/").slice(1).join("/") || id;
-  return { name, provider };
+  if (model) {
+    const prefix = `${model.provider}:`;
+    if (id.startsWith(prefix)) {
+      return { name: id.slice(prefix.length), provider: model.provider };
+    }
+    const provider = model.provider === "openrouter" ? (id.split("/")[0] ?? "openrouter") : model.provider;
+    const name = model.provider === "openrouter" ? (id.split("/").slice(1).join("/") || id) : id;
+    return { name, provider };
+  }
+
+  const separator = id.indexOf(":");
+  if (separator > 0) {
+    return { provider: id.slice(0, separator), name: id.slice(separator + 1) };
+  }
+
+  return { name: id, provider: "" };
 }
 
 export const ModelsDialogContent = ({ 

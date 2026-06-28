@@ -1,7 +1,9 @@
 export {
   SUPPORTED_CHAT_MODELS,
   DEFAULT_CHAT_MODEL_ID,
+  DEFAULT_PROVIDER_PRICING,
   findSupportedChatModel,
+  getModelApiId,
   isLocalProvider,
   isOllamaModel,
   modelSupportsVision,

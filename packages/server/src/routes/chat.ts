@@ -21,10 +21,10 @@ import {
 import { buildSystemPrompt } from "../system-prompts";
 import type { AuthenticatedRequest } from "../middleware/require-auth";
 import { requireCreditsBalance } from "../middleware/require-credits-balance";
-import { calculateCreditsForUsage } from "../lib/credits";
+import { calculateCreditsForUsage, isZeroPricedModel } from "../lib/credits";
 import { ingestAiUsage } from "../lib/polar";
 import { isSupportedChatModel, resolveChatModel } from "../lib/models";
-import { findSupportedChatModel, estimateTokens } from "@agenticcoder/shared";
+import { estimateTokens } from "@agenticcoder/shared";
 import { manageContext } from "../lib/context-manager";
 
 type ChatMessageMetadata = {
@@ -211,11 +211,13 @@ router.post(
         temperature: 0,
         toolCallStreaming: true,
         abortSignal: abortController.signal,
-        providerOptions: {
-          openrouter: {
-            transforms: ["middle-out"],
+        ...(resolvedModel.provider === "openrouter" ? {
+          providerOptions: {
+            openrouter: {
+              transforms: ["middle-out"],
+            },
           },
-        },
+        } : {}),
         onFinish(event) {
           clearTimeout(requestTimeout);
           completedUsage = event.totalUsage;
@@ -284,9 +286,8 @@ router.post(
           // Skip billing for local models (Ollama)
           if (resolvedModel.isLocal) return;
 
-          // Skip billing for free models (all pricing is $0)
-          const pricing = findSupportedChatModel(resolvedModel.modelId)?.pricing;
-          if (pricing && pricing.inputUsdPerMillionTokens === 0 && pricing.outputUsdPerMillionTokens === 0) {
+          // Skip billing only for explicit free catalog models.
+          if (isZeroPricedModel(resolvedModel.modelId)) {
             return;
           }
 
